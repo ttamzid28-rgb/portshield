@@ -22,3 +22,7 @@ Google controls free-tier access and quotas. This code does not enable billing o
 Local Streamlit and mocked-response tests passed. Real provider extraction and accuracy benchmarking remain pending until an API key is configured. No accuracy percentage or complete banking compliance is claimed.
 
 Google limits access to legacy 2.5 models for new projects and recommends 3.8 Flash. If the API returns a country-level free-tier error, changing the model cannot fix regional eligibility.
+
+## OpenRouter free-model alternative
+
+Create an API key at https://openrouter.ai/keys and add `OPENROUTER_API_KEY = "your-key-here"` to Streamlit Secrets. Select **OpenRouter (free models, text PDFs)** in Document intake. This route extracts text locally from uploaded PDFs, sends page-labelled text to OpenRouter's `openrouter/free` model router, and accepts a returned field only when its cited quote occurs on the stated page. Scanned PDFs need Gemini or a future OCR pipeline. Free models may be slow or unavailable and output quality varies. The app never selects OpenRouter paid models or paid OCR plugins. Do not upload confidential trade documents to this public demo.
