@@ -6,7 +6,7 @@ import streamlit as st
 from pypdf import PdfReader
 from checks import audit
 
-def extract_ai(packet, api_key, field_names):
+def extract_ai(packet, api_key, field_names, provider="Gemini"):
     """Send a bounded PDF packet; return unconfirmed values with model-cited evidence."""
     if not packet or len(packet)>4:
         raise ValueError('Upload between one and four PDFs.')
@@ -14,10 +14,13 @@ def extract_ai(packet, api_key, field_names):
         raise ValueError('Packet exceeds the 8 MB demo limit.')
     pages=[]
     parts=[]
+    page_text={}
     for i,(name,data) in enumerate(packet):
         reader=PdfReader(io.BytesIO(data))
         if reader.is_encrypted:raise ValueError('Use unencrypted PDFs.')
         pages.append(len(reader.pages))
+        for page_num,page in enumerate(reader.pages,1):
+            page_text[(i+1,page_num)]=page.extract_text() or ""
         parts.extend([{'text':f'Document {i+1}; filename: {name}'},
                       {'inlineData':{'mimeType':'application/pdf','data':base64.b64encode(data).decode()}}])
     if sum(pages)>30:raise ValueError('Packet exceeds the 30-page demo limit.')
@@ -36,11 +39,23 @@ latest_shipment_date is NOT credit expiry. unit_price is invoice unit price. Thi
 supports only a single line item and single container; omit related quantity/price/container
 fields if multiple or ambiguous. Do not sum or choose a representative item. Preserve conflicts
 as separate entries for the same field. Fields: """+','.join(field_names)
-    payload={'systemInstruction':{'parts':[{'text':prompt}]},'contents':[{'role':'user','parts':parts}],
+    if provider=='OpenRouter':
+        # Send bounded page text only. This route is free-model inference, no paid OCR plugin.
+        excerpts='\n\n'.join(f'DOCUMENT {doc} PAGE {page}\n{body}' for (doc,page),body in page_text.items() if body.strip())
+        if not excerpts.strip():raise ValueError('OpenRouter free mode needs text-based PDFs. Use Gemini for scanned PDFs.')
+        if len(excerpts)>100000:raise ValueError('Packet has too much text for the free-model demo (100,000 characters).')
+        prompt=prompt.replace('attached PDFs','page-labelled PDF text')
+        prompt+='\nReturn exactly a JSON object with fields array. Each item must have field, value, document, page and quote. Cite a contiguous exact quote from the indicated page.\n'
+        payload={'model':'openrouter/free','messages':[{'role':'system','content':prompt},
+                 {'role':'user','content':excerpts}],'temperature':0,'max_tokens':4000}
+        request=urllib.request.Request('https://openrouter.ai/api/v1/chat/completions',
+            data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+api_key},method='POST')
+    else:
+        payload={'systemInstruction':{'parts':[{'text':prompt}]},'contents':[{'role':'user','parts':parts}],
              'generationConfig':{'temperature':0,'responseMimeType':'application/json',
                                  'responseSchema':schema,'maxOutputTokens':8192}}
-    request=urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
-        data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','x-goog-api-key':api_key},method='POST')
+        request=urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
+            data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','x-goog-api-key':api_key},method='POST')
     for attempt in range(3):
         try:
             with urllib.request.urlopen(request,timeout=90) as response:raw=json.load(response)
@@ -50,6 +65,8 @@ as separate entries for the same field. Fields: """+','.join(field_names)
                 time.sleep(2**attempt)
                 continue
             detail=exc.read(4096).decode('utf-8','replace')
+            if provider=='OpenRouter':
+                raise ValueError(f'OpenRouter returned HTTP {exc.code}. Free model may be unavailable or quota exhausted; use Gemini or labelled text extraction.') from None
             if exc.code==400 and 'free tier is not available in your country' in detail.lower():
                 message='Google says the Gemini free tier is unavailable in this request region. Use labelled text extraction.'
             elif exc.code==400:
@@ -68,9 +85,15 @@ as separate entries for the same field. Fields: """+','.join(field_names)
         except (urllib.error.URLError,TimeoutError):
             raise ValueError('AI request timed out or could not connect. Please retry later.') from None
     try:
-        candidate=raw['candidates'][0]
-        if candidate.get('finishReason')!='STOP':raise ValueError()
-        result=json.loads(''.join(x.get('text','') for x in candidate['content']['parts']))
+        if provider=='OpenRouter':
+            answer=raw['choices'][0]['message']['content']
+            if not isinstance(answer,str):raise ValueError()
+            answer=answer.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
+            result=json.loads(answer)
+        else:
+            candidate=raw['candidates'][0]
+            if candidate.get('finishReason')!='STOP':raise ValueError()
+            result=json.loads(''.join(x.get('text','') for x in candidate['content']['parts']))
         entries=result['fields']
         if not isinstance(entries,list):raise ValueError()
         values={};evidence={};conflicts=set()
@@ -79,6 +102,7 @@ as separate entries for the same field. Fields: """+','.join(field_names)
             if key not in field_names or not isinstance(value,str) or not isinstance(quote,str):raise ValueError()
             if type(doc)!=int or type(page)!=int or not 1<=doc<=len(packet) or not 1<=page<=pages[doc-1]:raise ValueError()
             if not value.strip() or not quote.strip():continue
+            if provider=='OpenRouter' and quote.strip() not in page_text[(doc,page)]:continue
             value=value.strip()
             citation=f'{packet[doc-1][0]} · page {page} · AI-cited text (verify): {quote[:1000]}'
             if key in values and values[key]!=value:conflicts.add(key)
@@ -97,7 +121,7 @@ st.markdown("""<style>
 .stagebar{padding:12px 16px;background:#e5f3f1;border:1px solid #c5e3df;border-radius:8px;color:#146c63;margin-bottom:18px}
 </style>""",unsafe_allow_html=True)
 st.markdown('<div class="hero"><div class="eyebrow">PORTSHIELD AI / IMPORT OPERATIONS</div><h1>Trade document review workbench</h1><p>Find conflicts. Review the evidence. Prepare corrections before submission.</p></div>',unsafe_allow_html=True)
-st.caption('LIVE PROTOTYPE v0.3 · Six deterministic checks · Gemini PDF extraction available with API key')
+st.caption('LIVE PROTOTYPE v0.4 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
 fields=['lc_currency','lc_amount','latest_shipment_date','invoice_currency','invoice_total','invoice_quantity','unit_price','packing_quantity','packing_container','bl_container','on_board_date']
 base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'ABCD1234567','bl_container':'ABCD1234568','on_board_date':'2026-10-21'}
 fixed={**base,'invoice_total':'25000','bl_container':'ABCD1234567'}
@@ -147,29 +171,35 @@ with upload:
     st.caption('AI mode reads varied PDF layouts and scans; accuracy requires review. Labelled text mode works without an API key. Demo scope: one line item and one container per packet.')
     files=st.file_uploader('PDF documents',type=['pdf'],accept_multiple_files=True)
     try:
-        api_key=st.secrets.get('GEMINI_API_KEY','')
+        gemini_key=st.secrets.get('GEMINI_API_KEY','')
+        router_key=st.secrets.get('OPENROUTER_API_KEY','')
     except Exception:
-        api_key=''
-    st.markdown('**AI extraction · Gemini 3.8 Flash**')
+        gemini_key=router_key=''
+    provider=st.selectbox('AI provider',['Gemini (PDF and scans)','OpenRouter (free models, text PDFs)'])
+    selected='OpenRouter' if provider.startswith('OpenRouter') else 'Gemini'
+    api_key=router_key if selected=='OpenRouter' else gemini_key
     if not api_key:
-        st.info('AI setup required: add GEMINI_API_KEY in your Streamlit app settings → Secrets. Sample and labelled text extraction remain available.')
-        st.link_button('Get a free-tier Gemini API key','https://aistudio.google.com/apikey')
+        secret_name='OPENROUTER_API_KEY' if selected=='OpenRouter' else 'GEMINI_API_KEY'
+        st.info(f'Add {secret_name} in Streamlit app settings → Secrets to enable this provider.')
+        st.link_button('Get provider API key','https://openrouter.ai/keys' if selected=='OpenRouter' else 'https://aistudio.google.com/apikey')
+    elif selected=='OpenRouter':
+        st.caption('OpenRouter free model router processes text extracted locally from PDFs. Scans need Gemini. Free-model availability varies.')
     else:
-        st.caption('API key configured · Free-tier availability and quota depend on your Google project. Use a project without paid billing for a free-only demo.')
-    consent=st.checkbox('These PDFs are fictional or redacted, and I agree to send them to Google Gemini for extraction. Free-tier content may be used to improve Google products.')
+        st.caption('Gemini 3.8 Flash reads PDFs and scans. Free-tier availability depends on your Google project.')
+    consent=st.checkbox(f'These PDFs are fictional or redacted, and I agree to send '+('extracted PDF text to OpenRouter and its routed model.' if selected=='OpenRouter' else 'the PDFs to Google Gemini. Free-tier content may be used to improve Google products.'))
     if st.button('Extract with AI',type='primary',disabled=not api_key or not consent):
         if time.time()-st.session_state.get('last_ai_call',0)<20:
             st.warning('Please wait 20 seconds between extraction attempts.')
         else:
             st.session_state.last_ai_call=time.time()
             try:
-                with st.spinner('Reading PDF pages and extracting source-linked fields…'):
-                    values,source=extract_ai([(f.name,f.getvalue()) for f in files or []],api_key,fields)
+                with st.spinner('Extracting source-linked fields…'):
+                    values,source=extract_ai([(f.name,f.getvalue()) for f in files or []],api_key,fields,provider=selected)
                 st.session_state.previous=st.session_state.pop('results',st.session_state.get('previous',[]))
                 st.session_state.fields=values;st.session_state.evidence=source;st.session_state.ai_pending=True
                 st.rerun()
             except ValueError as exc:st.error(str(exc))
-            except Exception:st.error('Extraction failed. No new fields accepted. Try readable, unencrypted PDFs or use manual entry.')
+            except Exception:st.error('Extraction failed. No new fields accepted. Try another provider or use labelled text extraction.')
     st.divider()
     if st.button('Extract uploaded text'):
         extracted={}; evidence={}
@@ -223,7 +253,7 @@ with review:
                 st.write(result['evidence']);st.caption('Evidence refers to confirmed values; edits require reviewer verification against the source.')
         with st.expander('Source extraction evidence'):
             for k,v in st.session_state.evidence.items():st.write(f'**{k}**: {v}')
-        report={'prototype':'PortShield v0.3','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
+        report={'prototype':'PortShield v0.4','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
         st.download_button('Download review report (JSON)',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with actions:
     st.subheader('Correction desk')
@@ -251,11 +281,11 @@ with actions:
             lines.extend([r['check'],r['evidence'],'Suggested owner: '+owner,'Requested action: '+action,''])
         draft='Subject: Document review - please confirm outstanding items\n\nPlease review the items below against the actual shipment and credit terms. Confirm the appropriate correction or escalation before final submission.\n\n'+'\n'.join(lines)
         st.download_button('Download correction-request draft',draft,'portshield-correction-request.txt','text/plain')
-        report={'prototype':'PortShield v0.3','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
+        report={'prototype':'PortShield v0.4','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
         st.download_button('Download full review data',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with about:
     st.subheader('Working today')
-    st.write('Gemini PDF extraction (API key required; review mandatory) • sample PDF upload • labelled text extraction • editable fields • six deterministic checks • source text evidence • comparison with previous review • downloadable JSON report')
+    st.write('Gemini PDF extraction and OpenRouter free text AI (provider API key required; review mandatory) • sample PDF upload • labelled text extraction • editable fields • six deterministic checks • source text evidence • comparison with previous review • downloadable JSON report')
     st.subheader('Next milestones')
     st.write('Benchmark AI extraction on real layouts; PDF evidence viewer; versioned correction uploads; expert-reviewed rules and evaluation dataset.')
     st.caption('No financial savings, accuracy percentage or regulatory certification is claimed. Uploaded files are processed in the app session; do not upload confidential trade documents to this public prototype.')
