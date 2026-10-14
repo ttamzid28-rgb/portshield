@@ -15,8 +15,10 @@ Never commit the real key to GitHub. Save secrets and reload the app.
 
 ## Scope
 
-Uses Gemini 2.5 Flash generateContent with inline PDF input and structured JSON output. Maximum four PDFs, 8 MB total and 30 pages. One line item and one container only. Unknown fields remain blank. Conflicting returned values are blocked. Page references are range-checked, but quotes and values still require human verification. Face L/C amount is not a tolerance-adjusted or remaining credit amount.
+Uses Gemini 3.8 Flash generateContent with inline PDF input and structured JSON output. Maximum four PDFs, 8 MB total and 30 pages. One line item and one container only. Unknown fields remain blank. Conflicting returned values are blocked. Page references are range-checked, but quotes and values still require human verification. Face L/C amount is not a tolerance-adjusted or remaining credit amount.
 
 Google controls free-tier access and quotas. This code does not enable billing or switch to paid providers. A billing-enabled key can incur charges. Free-tier content may be used to improve Google products: use fictional or redacted demo documents.
 
 Local Streamlit and mocked-response tests passed. Real provider extraction and accuracy benchmarking remain pending until an API key is configured. No accuracy percentage or complete banking compliance is claimed.
+
+Google limits access to legacy 2.5 models for new projects and recommends 3.8 Flash. If the API returns a country-level free-tier error, changing the model cannot fix regional eligibility.
