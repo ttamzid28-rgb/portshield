@@ -39,16 +39,25 @@ as separate entries for the same field. Fields: """+','.join(field_names)
     payload={'systemInstruction':{'parts':[{'text':prompt}]},'contents':[{'role':'user','parts':parts}],
              'generationConfig':{'temperature':0,'responseMimeType':'application/json',
                                  'responseSchema':schema,'maxOutputTokens':8192}}
-    request=urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+    request=urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
         data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','x-goog-api-key':api_key},method='POST')
     try:
         with urllib.request.urlopen(request,timeout=90) as response:raw=json.load(response)
     except urllib.error.HTTPError as exc:
-        messages={429:'Free-tier quota reached. Wait and try later; no paid fallback is used.',
-                  400:'Provider rejected the request. Check the API key and PDF format.',
-                  403:'API access denied. Check the key and project access.',
-                  404:'The configured model is unavailable for this project.'}
-        raise ValueError(messages.get(exc.code,'AI provider error. Try again later.')) from None
+        detail=exc.read(4096).decode('utf-8','replace')
+        if exc.code==400 and 'free tier is not available in your country' in detail.lower():
+            message='Google says the Gemini free tier is unavailable in this request region. The app will not enable billing; use labelled text extraction.'
+        elif exc.code==400:
+            message='Google rejected the PDF or structured request (400). Try the sample PDFs, or use labelled text extraction.'
+        elif exc.code==401 or exc.code==403:
+            message='Google denied API access. Check that GEMINI_API_KEY belongs to a project with Gemini API access.'
+        elif exc.code==404:
+            message='Gemini 3.8 Flash is unavailable to this API key/project. Check model availability in Google AI Studio.'
+        elif exc.code==429:
+            message='Google rate limit or quota reached. Retry later; the app does not switch to a paid provider.'
+        else:
+            message=f'Google API returned HTTP {exc.code}. Try later or use labelled text extraction.'
+        raise ValueError(message) from None
     except (urllib.error.URLError,TimeoutError):
         raise ValueError('AI request timed out or could not connect. Please retry later.') from None
     try:
@@ -134,7 +143,7 @@ with upload:
         api_key=st.secrets.get('GEMINI_API_KEY','')
     except Exception:
         api_key=''
-    st.markdown('**AI extraction · Gemini 2.5 Flash**')
+    st.markdown('**AI extraction · Gemini 3.8 Flash**')
     if not api_key:
         st.info('AI setup required: add GEMINI_API_KEY in your Streamlit app settings → Secrets. Sample and labelled text extraction remain available.')
         st.link_button('Get a free-tier Gemini API key','https://aistudio.google.com/apikey')
