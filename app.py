@@ -66,7 +66,16 @@ as separate entries for the same field. Fields: """+','.join(field_names)
                 continue
             detail=exc.read(4096).decode('utf-8','replace')
             if provider=='OpenRouter':
-                raise ValueError(f'OpenRouter returned HTTP {exc.code}. Free model may be unavailable or quota exhausted; use Gemini or labelled text extraction.') from None
+                try:
+                    provider_error=json.loads(detail).get('error',{}).get('message','')
+                except (ValueError,TypeError,AttributeError):
+                    provider_error=''
+                if exc.code in (401,403):message='OpenRouter denied this API key. Check OPENROUTER_API_KEY in Streamlit Secrets.'
+                elif exc.code==402:message='OpenRouter reports insufficient credits for this request. The app only requests free models; check your account limits.'
+                elif exc.code==429:message='OpenRouter free-model quota or rate limit reached. Wait and retry.'
+                elif exc.code in (500,502,503,504):message='OpenRouter free model temporarily unavailable after retries. Try later.'
+                else:message=f'OpenRouter returned HTTP {exc.code}. '+provider_error[:300]
+                raise ValueError(message) from None
             if exc.code==400 and 'free tier is not available in your country' in detail.lower():
                 message='Google says the Gemini free tier is unavailable in this request region. Use labelled text extraction.'
             elif exc.code==400:
