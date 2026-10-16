@@ -46,8 +46,16 @@ as separate entries for the same field. Fields: """+','.join(field_names)
         if len(excerpts)>100000:raise ValueError('Packet has too much text for the free-model demo (100,000 characters).')
         prompt=prompt.replace('attached PDFs','page-labelled PDF text')
         prompt+='\nReturn exactly a JSON object with fields array. Each item must have field, value, document, page and quote. Cite a contiguous exact quote from the indicated page.\n'
+        def json_schema(node):
+            if isinstance(node,list):return [json_schema(v) for v in node]
+            if not isinstance(node,dict):return node
+            result={k:(v.lower() if k=='type' else json_schema(v)) for k,v in node.items()}
+            if result.get('type')=='object':result['additionalProperties']=False
+            return result
         payload={'model':'openrouter/free','messages':[{'role':'system','content':prompt},
-                 {'role':'user','content':excerpts}],'temperature':0,'max_tokens':4000}
+                 {'role':'user','content':excerpts}],'max_tokens':8192,
+                 'response_format':{'type':'json_schema','json_schema':{'name':'trade_fields','strict':True,'schema':json_schema(schema)}},
+                 'provider':{'require_parameters':True}}
         request=urllib.request.Request('https://openrouter.ai/api/v1/chat/completions',
             data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+api_key},method='POST')
     else:
@@ -93,16 +101,24 @@ as separate entries for the same field. Fields: """+','.join(field_names)
             raise ValueError(message) from None
         except (urllib.error.URLError,TimeoutError):
             raise ValueError('AI request timed out or could not connect. Please retry later.') from None
+    stage='response envelope'
+    finish='unknown'
+    model=str(raw.get('model',provider))[:100]
     try:
         if provider=='OpenRouter':
-            answer=raw['choices'][0]['message']['content']
+            candidate=raw['choices'][0]
+            finish=candidate.get('finish_reason','unknown')
+            if finish not in ('stop','unknown',None):raise ValueError()
+            answer=candidate['message']['content']
             if not isinstance(answer,str):raise ValueError()
             answer=answer.strip().removeprefix('```json').removeprefix('```').removesuffix('```').strip()
+            stage='JSON decoding'
             result=json.loads(answer)
         else:
             candidate=raw['candidates'][0]
             if candidate.get('finishReason')!='STOP':raise ValueError()
             result=json.loads(''.join(x.get('text','') for x in candidate['content']['parts']))
+        stage='field schema'
         entries=result['fields']
         if not isinstance(entries,list):raise ValueError()
         values={};evidence={};conflicts=set()
@@ -111,16 +127,19 @@ as separate entries for the same field. Fields: """+','.join(field_names)
             if key not in field_names or not isinstance(value,str) or not isinstance(quote,str):raise ValueError()
             if type(doc)!=int or type(page)!=int or not 1<=doc<=len(packet) or not 1<=page<=pages[doc-1]:raise ValueError()
             if not value.strip() or not quote.strip():continue
-            if provider=='OpenRouter' and quote.strip() not in page_text[(doc,page)]:continue
+            if provider=='OpenRouter' and ' '.join(quote.split()) not in ' '.join(page_text[(doc,page)].split()):continue
             value=value.strip()
             citation=f'{packet[doc-1][0]} · page {page} · AI-cited text (verify): {quote[:1000]}'
             if key in values and values[key]!=value:conflicts.add(key)
             values[key]=value;evidence[key]=evidence.get(key,'')+'\n'+citation
         for key in conflicts:
             values[key]='';evidence[key]='Conflicting AI values; manual review required. '+evidence[key]
+        if not any(values.values()):
+            stage='no source-supported fields';raise ValueError()
+        evidence['_extraction']=f'{provider} | Model: {model} | {sum(bool(v) for v in values.values())} fields accepted for human review'
         return {k:values.get(k,'') for k in field_names},evidence
     except (KeyError,IndexError,TypeError,ValueError):
-        raise ValueError('AI returned incomplete or invalid structured data. No fields were accepted; retry or use manual entry.') from None
+        raise ValueError(f'AI response could not be accepted: {stage}. Provider: {provider}; model: {model}; finish: {finish}. No new fields loaded.') from None
 
 st.set_page_config(page_title='PortShield AI | Document Readiness',page_icon='🛡️',layout='wide')
 st.markdown("""<style>
@@ -130,7 +149,7 @@ st.markdown("""<style>
 .stagebar{padding:12px 16px;background:#e5f3f1;border:1px solid #c5e3df;border-radius:8px;color:#146c63;margin-bottom:18px}
 </style>""",unsafe_allow_html=True)
 st.markdown('<div class="hero"><div class="eyebrow">PORTSHIELD AI / IMPORT OPERATIONS</div><h1>Trade document review workbench</h1><p>Find conflicts. Review the evidence. Prepare corrections before submission.</p></div>',unsafe_allow_html=True)
-st.caption('LIVE PROTOTYPE v0.4 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
+st.caption('LIVE PROTOTYPE v0.5 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
 fields=['lc_currency','lc_amount','latest_shipment_date','invoice_currency','invoice_total','invoice_quantity','unit_price','packing_quantity','packing_container','bl_container','on_board_date']
 base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'ABCD1234567','bl_container':'ABCD1234568','on_board_date':'2026-10-21'}
 fixed={**base,'invoice_total':'25000','bl_container':'ABCD1234567'}
@@ -178,7 +197,10 @@ with overview:
 with upload:
     st.subheader('Upload a document packet')
     st.caption('AI mode reads varied PDF layouts and scans; accuracy requires review. Labelled text mode works without an API key. Demo scope: one line item and one container per packet.')
-    files=st.file_uploader('PDF documents',type=['pdf'],accept_multiple_files=True)
+    use_demo=st.checkbox('Use bundled sample PDFs — no upload needed')
+    files=st.file_uploader('PDF documents',type=['pdf'],accept_multiple_files=True,disabled=use_demo)
+    if use_demo:
+        st.caption('The four fictional PDFs from the sample download will be sent through the selected AI provider.')
     try:
         gemini_key=st.secrets.get('GEMINI_API_KEY','')
         router_key=st.secrets.get('OPENROUTER_API_KEY','')
@@ -203,14 +225,20 @@ with upload:
             st.session_state.last_ai_call=time.time()
             try:
                 with st.spinner('Extracting source-linked fields…'):
-                    values,source=extract_ai([(f.name,f.getvalue()) for f in files or []],api_key,fields,provider=selected)
+                    if use_demo:
+                        with zipfile.ZipFile(Path(__file__).parent/'sample_documents.zip') as bundle:
+                            packet=[(name,bundle.read(name)) for name in bundle.namelist() if name.endswith('.pdf')]
+                    else:packet=[(f.name,f.getvalue()) for f in files or []]
+                    values,source=extract_ai(packet,api_key,fields,provider=selected)
                 st.session_state.previous=st.session_state.pop('results',st.session_state.get('previous',[]))
                 st.session_state.fields=values;st.session_state.evidence=source;st.session_state.ai_pending=True
                 st.rerun()
             except ValueError as exc:st.error(str(exc))
             except Exception:st.error('Extraction failed. No new fields accepted. Try another provider or use labelled text extraction.')
+    if st.session_state.get('ai_pending'):
+        st.success('AI extraction complete. Open Review & evidence to confirm the extracted fields.')
     st.divider()
-    if st.button('Extract uploaded text'):
+    if st.button('Extract uploaded text',disabled=use_demo):
         extracted={}; evidence={}
         if not files:st.warning('Upload at least one PDF.')
         for f in files or []:
@@ -262,7 +290,7 @@ with review:
                 st.write(result['evidence']);st.caption('Evidence refers to confirmed values; edits require reviewer verification against the source.')
         with st.expander('Source extraction evidence'):
             for k,v in st.session_state.evidence.items():st.write(f'**{k}**: {v}')
-        report={'prototype':'PortShield v0.4','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
+        report={'prototype':'PortShield v0.5','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
         st.download_button('Download review report (JSON)',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with actions:
     st.subheader('Correction desk')
@@ -290,7 +318,7 @@ with actions:
             lines.extend([r['check'],r['evidence'],'Suggested owner: '+owner,'Requested action: '+action,''])
         draft='Subject: Document review - please confirm outstanding items\n\nPlease review the items below against the actual shipment and credit terms. Confirm the appropriate correction or escalation before final submission.\n\n'+'\n'.join(lines)
         st.download_button('Download correction-request draft',draft,'portshield-correction-request.txt','text/plain')
-        report={'prototype':'PortShield v0.4','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
+        report={'prototype':'PortShield v0.5','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
         st.download_button('Download full review data',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with about:
     st.subheader('Working today')
