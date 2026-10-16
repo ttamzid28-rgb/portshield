@@ -278,6 +278,7 @@ with review:
         st.session_state.ai_pending=False
         st.session_state.previous=st.session_state.get('results',st.session_state.get('previous',[]))
         st.session_state.results=audit(vals);st.session_state.fields=vals
+        st.rerun()
     if 'results' in st.session_state:
         results=st.session_state.results
         cols=st.columns(3)
