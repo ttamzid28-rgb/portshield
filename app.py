@@ -149,7 +149,7 @@ st.markdown("""<style>
 .stagebar{padding:12px 16px;background:#e5f3f1;border:1px solid #c5e3df;border-radius:8px;color:#146c63;margin-bottom:18px}
 </style>""",unsafe_allow_html=True)
 st.markdown('<div class="hero"><div class="eyebrow">PORTSHIELD AI / IMPORT OPERATIONS</div><h1>Trade document review workbench</h1><p>Find conflicts. Review the evidence. Prepare corrections before submission.</p></div>',unsafe_allow_html=True)
-st.caption('LIVE PROTOTYPE v0.5 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
+st.caption('LIVE PROTOTYPE v0.6 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
 fields=['lc_currency','lc_amount','latest_shipment_date','invoice_currency','invoice_total','invoice_quantity','unit_price','packing_quantity','packing_container','bl_container','on_board_date']
 base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'ABCD1234567','bl_container':'ABCD1234568','on_board_date':'2026-10-21'}
 fixed={**base,'invoice_total':'25000','bl_container':'ABCD1234567'}
@@ -198,15 +198,25 @@ with upload:
     st.subheader('Upload a document packet')
     st.caption('AI mode reads varied PDF layouts and scans; accuracy requires review. Labelled text mode works without an API key. Demo scope: one line item and one container per packet.')
     use_demo=st.checkbox('Use bundled sample PDFs — no upload needed')
+    benchmark_case=None
+    if use_demo:
+        benchmark_data=json.loads((Path(__file__).parent/'benchmark_data.json').read_text())
+        case_options=['Original quick demo']+[c['case_id']+' | '+c['scenario']+' | '+c['split'] for c in benchmark_data['cases']]
+        chosen_case=st.selectbox('Built-in document packet',case_options)
+        if chosen_case!='Original quick demo':
+            benchmark_case=next(c for c in benchmark_data['cases'] if chosen_case.startswith(c['case_id']+' |'))
+            st.caption('Fictional benchmark PDFs. The answer key is not sent to the AI. Holdout cases should be reserved until development testing is complete.')
+            if benchmark_case['case_id']=='PSB-11':st.info('Image-only scan test: OpenRouter text extraction should request OCR or manual review.')
+        st.download_button('Download all benchmark packets',base64.b64decode(benchmark_data['zip_base64']),'PortShield-Benchmark-v1.zip','application/zip')
     files=st.file_uploader('PDF documents',type=['pdf'],accept_multiple_files=True,disabled=use_demo)
     if use_demo:
-        st.caption('The four fictional PDFs from the sample download will be sent through the selected AI provider.')
+        st.caption('The selected fictional PDF packet will be processed by the selected AI provider.')
     try:
         gemini_key=st.secrets.get('GEMINI_API_KEY','')
         router_key=st.secrets.get('OPENROUTER_API_KEY','')
     except Exception:
         gemini_key=router_key=''
-    provider=st.selectbox('AI provider',['Gemini (PDF and scans)','OpenRouter (free models, text PDFs)'])
+    provider=st.selectbox('AI provider',['OpenRouter (free models, text PDFs)','Gemini (PDF and scans)'])
     selected='OpenRouter' if provider.startswith('OpenRouter') else 'Gemini'
     api_key=router_key if selected=='OpenRouter' else gemini_key
     if not api_key:
@@ -225,11 +235,16 @@ with upload:
             st.session_state.last_ai_call=time.time()
             try:
                 with st.spinner('Extracting source-linked fields…'):
-                    if use_demo:
+                    if use_demo and benchmark_case:
+                        with zipfile.ZipFile(io.BytesIO(base64.b64decode(benchmark_data['zip_base64']))) as bundle:
+                            packet=[(Path(name).name,bundle.read(name)) for name in bundle.namelist() if '/'+benchmark_case['case_id']+'/' in name and name.endswith('.pdf')]
+                    elif use_demo:
                         with zipfile.ZipFile(Path(__file__).parent/'sample_documents.zip') as bundle:
                             packet=[(name,bundle.read(name)) for name in bundle.namelist() if name.endswith('.pdf')]
                     else:packet=[(f.name,f.getvalue()) for f in files or []]
+                    started=time.perf_counter()
                     values,source=extract_ai(packet,api_key,fields,provider=selected)
+                    st.session_state.benchmark_run={'case_id':benchmark_case['case_id'],'provider':selected,'elapsed_seconds':round(time.perf_counter()-started,2),'raw_fields':dict(values),'source_evidence':dict(source)} if benchmark_case else None
                 st.session_state.previous=st.session_state.pop('results',st.session_state.get('previous',[]))
                 st.session_state.fields=values;st.session_state.evidence=source;st.session_state.ai_pending=True
                 st.rerun()
@@ -237,6 +252,13 @@ with upload:
             except Exception:st.error('Extraction failed. No new fields accepted. Try another provider or use labelled text extraction.')
     if st.session_state.get('ai_pending'):
         st.success('AI extraction complete. Open Review & evidence to confirm the extracted fields.')
+    run=st.session_state.get('benchmark_run')
+    if run:
+        with st.expander('Latest benchmark extraction record'):
+            st.caption('Raw extraction captured before reviewer edits. This record remains tied to the tested case, even if you select another packet.')
+            st.write('Case: '+run['case_id']+' | Provider: '+run['provider']+' | '+str(run['elapsed_seconds'])+' seconds')
+            st.json(run['raw_fields'])
+            st.download_button('Download benchmark extraction record',json.dumps(run,indent=2),'portshield-'+run['case_id']+'-extraction.json','application/json')
     st.divider()
     if st.button('Extract uploaded text',disabled=use_demo):
         extracted={}; evidence={}
@@ -291,7 +313,7 @@ with review:
                 st.write(result['evidence']);st.caption('Evidence refers to confirmed values; edits require reviewer verification against the source.')
         with st.expander('Source extraction evidence'):
             for k,v in st.session_state.evidence.items():st.write(f'**{k}**: {v}')
-        report={'prototype':'PortShield v0.5','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
+        report={'prototype':'PortShield v0.6','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
         st.download_button('Download review report (JSON)',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with actions:
     st.subheader('Correction desk')
@@ -319,7 +341,7 @@ with actions:
             lines.extend([r['check'],r['evidence'],'Suggested owner: '+owner,'Requested action: '+action,''])
         draft='Subject: Document review - please confirm outstanding items\n\nPlease review the items below against the actual shipment and credit terms. Confirm the appropriate correction or escalation before final submission.\n\n'+'\n'.join(lines)
         st.download_button('Download correction-request draft',draft,'portshield-correction-request.txt','text/plain')
-        report={'prototype':'PortShield v0.5','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
+        report={'prototype':'PortShield v0.6','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
         st.download_button('Download full review data',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with about:
     st.subheader('Working today')
