@@ -140,9 +140,18 @@ as separate entries for the same field. Fields: """+','.join(field_names)
         if not isinstance(entries,list):raise ValueError()
         values={};evidence={};conflicts=set()
         for item in entries:
-            key=item['field'];value=item['value'];doc=item['document'];page=item['page'];quote=item['quote']
-            if key not in field_names or not isinstance(value,str) or not isinstance(quote,str):raise ValueError()
-            if type(doc)!=int or type(page)!=int or not 1<=doc<=len(packet) or not 1<=page<=pages[doc-1]:raise ValueError()
+            if not isinstance(item,dict):continue
+            key=item.get('field');value=item.get('value');doc=item.get('document');page=item.get('page');quote=item.get('quote')
+            # Some free endpoints serialize integer indexes as strings despite the schema.
+            if isinstance(doc,str) and doc.isdigit():doc=int(doc)
+            if isinstance(page,str) and page.isdigit():page=int(page)
+            if type(value)==int:value=str(value)
+            if key not in field_names or not isinstance(value,str) or not isinstance(quote,str):
+                evidence['_rejected']=evidence.get('_rejected','')+' Malformed field entry omitted.'
+                continue
+            if type(doc)!=int or type(page)!=int or not 1<=doc<=len(packet) or not 1<=page<=pages[doc-1]:
+                evidence['_rejected']=evidence.get('_rejected','')+f' {key}: invalid source document/page.'
+                continue
             if not value.strip() or not quote.strip():continue
             if page_text[(doc,page)].strip() and normalized(quote) not in normalized(page_text[(doc,page)]):
                 evidence.setdefault('_rejected','')
