@@ -5,6 +5,7 @@ from pathlib import Path
 import streamlit as st
 from pypdf import PdfReader
 from checks import audit
+from extraction_validation import normalized, validate_value
 
 def extract_ai(packet, api_key, field_names, provider="Gemini"):
     """Send a bounded PDF packet; return unconfirmed values with model-cited evidence."""
@@ -20,7 +21,7 @@ def extract_ai(packet, api_key, field_names, provider="Gemini"):
         if reader.is_encrypted:raise ValueError('Use unencrypted PDFs.')
         pages.append(len(reader.pages))
         for page_num,page in enumerate(reader.pages,1):
-            page_text[(i+1,page_num)]=page.extract_text() or ""
+            page_text[(i+1,page_num)]=page.extract_text(extraction_mode="layout") or ""
         parts.extend([{'text':f'Document {i+1}; filename: {name}'},
                       {'inlineData':{'mimeType':'application/pdf','data':base64.b64encode(data).decode()}}])
     if sum(pages)>30:raise ValueError('Packet exceeds the 30-page demo limit.')
@@ -37,11 +38,27 @@ plain decimal string without grouping commas or currency symbols. Currency: ISO 
 explicit. lc_amount is face credit amount, not remaining balance or tolerance-adjusted amount.
 latest_shipment_date is NOT credit expiry. unit_price is invoice unit price. This prototype
 supports only a single line item and single container; omit related quantity/price/container
-fields if multiple or ambiguous. Do not sum or choose a representative item. Preserve conflicts
+fields if multiple or ambiguous. Do not sum or choose a representative item.
+FIELD DEFINITIONS: Read each document heading to identify its type; a cross-reference to
+an invoice does not make a packing list an invoice. lc_* fields come only from the credit;
+invoice_* and unit_price only from the invoice; packing_* only from the packing list;
+bl_container and on_board_date only from the bill of lading.
+invoice_quantity is the explicitly invoiced goods quantity, not packages or unit price.
+packing_quantity is the explicitly stated goods quantity in the SAME unit as the invoice
+quantity. For example, mass in KG and number of bags are different quantities. Do not
+substitute package counts, gross/net weights, or package capacity for an explicit quantity.
+If equivalent units are not explicit, omit packing_quantity for manual review.
+packing_container and bl_container are equipment identifiers under a container-number
+label, never descriptions of bags/cartons, seal numbers, invoice numbers or B/L numbers.
+A typical identifier has three owner letters, U/J/Z, then seven digits. Do not repair typos.
+Every quote must include BOTH the field label/context AND its literal value from the same
+page. Preserve table rows and distinguish neighbouring cells. Do not infer missing values
+from multiplication or another document. Missing container in B/L must stay missing.
+Preserve conflicts
 as separate entries for the same field. Fields: """+','.join(field_names)
     if provider=='OpenRouter':
         # Send bounded page text only. This route is free-model inference, no paid OCR plugin.
-        excerpts='\n\n'.join(f'DOCUMENT {doc} PAGE {page}\n{body}' for (doc,page),body in page_text.items() if body.strip())
+        excerpts='\n\n'.join(f'DOCUMENT {doc} FILENAME {packet[doc-1][0]} PAGE {page}\n{body}' for (doc,page),body in page_text.items() if body.strip())
         if not excerpts.strip():raise ValueError('OpenRouter free mode needs text-based PDFs. Use Gemini for scanned PDFs.')
         if len(excerpts)>100000:raise ValueError('Packet has too much text for the free-model demo (100,000 characters).')
         prompt=prompt.replace('attached PDFs','page-labelled PDF text')
@@ -127,8 +144,15 @@ as separate entries for the same field. Fields: """+','.join(field_names)
             if key not in field_names or not isinstance(value,str) or not isinstance(quote,str):raise ValueError()
             if type(doc)!=int or type(page)!=int or not 1<=doc<=len(packet) or not 1<=page<=pages[doc-1]:raise ValueError()
             if not value.strip() or not quote.strip():continue
-            if provider=='OpenRouter' and ' '.join(quote.split()) not in ' '.join(page_text[(doc,page)].split()):continue
-            value=value.strip()
+            if page_text[(doc,page)].strip() and normalized(quote) not in normalized(page_text[(doc,page)]):
+                evidence.setdefault('_rejected','')
+                evidence['_rejected']+=f' {key}: quotation not found on cited page.'
+                continue
+            value,reason=validate_value(key,value,quote)
+            if reason:
+                evidence.setdefault('_rejected','')
+                evidence['_rejected']+=f' {key}: {reason}'
+                continue
             citation=f'{packet[doc-1][0]} · page {page} · AI-cited text (verify): {quote[:1000]}'
             if key in values and values[key]!=value:conflicts.add(key)
             values[key]=value;evidence[key]=evidence.get(key,'')+'\n'+citation
@@ -149,7 +173,7 @@ st.markdown("""<style>
 .stagebar{padding:12px 16px;background:#e5f3f1;border:1px solid #c5e3df;border-radius:8px;color:#146c63;margin-bottom:18px}
 </style>""",unsafe_allow_html=True)
 st.markdown('<div class="hero"><div class="eyebrow">PORTSHIELD AI / IMPORT OPERATIONS</div><h1>Trade document review workbench</h1><p>Find conflicts. Review the evidence. Prepare corrections before submission.</p></div>',unsafe_allow_html=True)
-st.caption('LIVE PROTOTYPE v0.6 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
+st.caption('LIVE PROTOTYPE v0.7 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
 fields=['lc_currency','lc_amount','latest_shipment_date','invoice_currency','invoice_total','invoice_quantity','unit_price','packing_quantity','packing_container','bl_container','on_board_date']
 base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'ABCD1234567','bl_container':'ABCD1234568','on_board_date':'2026-10-21'}
 fixed={**base,'invoice_total':'25000','bl_container':'ABCD1234567'}
@@ -313,7 +337,7 @@ with review:
                 st.write(result['evidence']);st.caption('Evidence refers to confirmed values; edits require reviewer verification against the source.')
         with st.expander('Source extraction evidence'):
             for k,v in st.session_state.evidence.items():st.write(f'**{k}**: {v}')
-        report={'prototype':'PortShield v0.6','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
+        report={'prototype':'PortShield v0.7','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
         st.download_button('Download review report (JSON)',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with actions:
     st.subheader('Correction desk')
@@ -341,7 +365,7 @@ with actions:
             lines.extend([r['check'],r['evidence'],'Suggested owner: '+owner,'Requested action: '+action,''])
         draft='Subject: Document review - please confirm outstanding items\n\nPlease review the items below against the actual shipment and credit terms. Confirm the appropriate correction or escalation before final submission.\n\n'+'\n'.join(lines)
         st.download_button('Download correction-request draft',draft,'portshield-correction-request.txt','text/plain')
-        report={'prototype':'PortShield v0.6','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
+        report={'prototype':'PortShield v0.7','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
         st.download_button('Download full review data',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with about:
     st.subheader('Working today')
