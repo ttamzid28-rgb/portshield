@@ -1,7 +1,9 @@
 from decimal import Decimal, InvalidOperation
 from datetime import date
 
-def audit(d):
+def audit(d, field_states=None):
+    from field_states import usable_values
+    d = usable_values(d, field_states)
     findings=[]
     def add(rule, status, evidence):
         findings.append({'check':rule,'status':status,'evidence':evidence})
