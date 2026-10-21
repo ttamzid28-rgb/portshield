@@ -96,40 +96,9 @@ as separate entries for the same field. Fields: """+','.join(field_names)
     try:
         entries=result['fields']
         if not isinstance(entries,list):raise Failure('FIELD_SCHEMA', 'The model did not return a fields array.')
-        values={};evidence={};conflicts=set()
-        for item in entries:
-            if not isinstance(item,dict):
-                evidence['_rejected']=evidence.get('_rejected','')+' Malformed field entry omitted.'
-                continue
-            key=item.get('field');value=item.get('value');doc=item.get('document');page=item.get('page');quote=item.get('quote')
-            # Some free endpoints serialize integer indexes as strings despite the schema.
-            if isinstance(doc,str) and doc.isdigit():doc=int(doc)
-            if isinstance(page,str) and page.isdigit():page=int(page)
-            if type(value)==int:value=str(value)
-            if key not in field_names or not isinstance(value,str) or not isinstance(quote,str):
-                evidence['_rejected']=evidence.get('_rejected','')+' Malformed field entry omitted.'
-                continue
-            if type(doc)!=int or type(page)!=int or not 1<=doc<=len(packet) or not 1<=page<=pages[doc-1]:
-                evidence['_rejected']=evidence.get('_rejected','')+f' {key}: invalid source document/page.'
-                continue
-            if not value.strip() or not quote.strip():continue
-            if page_text[(doc,page)].strip() and normalized(quote) not in normalized(page_text[(doc,page)]):
-                evidence.setdefault('_rejected','')
-                evidence['_rejected']+=f' {key}: quotation not found on cited page.'
-                continue
-            value,reason=validate_value(key,value,quote)
-            if reason:
-                evidence.setdefault('_rejected','')
-                evidence['_rejected']+=f' {key}: {reason}'
-                continue
-            citation=f'{packet[doc-1][0]} · page {page} · AI-cited text (verify): {quote[:1000]}'
-            if key in values and values[key]!=value:conflicts.add(key)
-            values[key]=value;evidence[key]=evidence.get(key,'')+'\n'+citation
-        for key in conflicts:
-            values[key]='';evidence[key]='Conflicting AI values; manual review required. '+evidence[key]
-        if not any(values.values()):
-            raise Failure('SOURCE_VALIDATION', 'No fields passed source and value validation. Review the documents manually.')
-        evidence['_extraction']=f'{provider} | Model: {model} | {sum(bool(v) for v in values.values())} fields accepted for human review'
+        from field_states import collect_fields
+        values,evidence=collect_fields(entries,field_names,packet,page_text)
+        evidence['_extraction']=f'{provider} | Model: {model} | {sum(bool(v) for v in values.values())} source-linked candidates; unresolved fields require manual review'
         return {k:values.get(k,'') for k in field_names},evidence
     except (KeyError,IndexError,TypeError,ValueError,AttributeError):
         raise Failure('FIELD_SCHEMA', 'The response has malformed field data. No new fields loaded.') from None
