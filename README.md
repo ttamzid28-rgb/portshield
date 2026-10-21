@@ -45,3 +45,12 @@ Tests exercise error categories, null/malformed responses, model mismatch, capab
 
 ## Scope
 Fictional/redacted data only on this public prototype. One line item and one container per packet. Scanned-document accuracy, regulatory applicability and financial savings remain unvalidated. The bundled sample supports demonstration without AI; using Streamlit Cloud still requires Internet access.
+
+## Source date and number validation — 2026-10-21
+Dates must be valid, zero-padded ISO values and equal a single unambiguous calendar date in the cited quotation. Supported source dates include year-first numeric dates, English month names, and day/month or month/day numeric dates only when their order is unambiguous. Two-digit years, conflicting dates and ambiguous dates such as `10/11/2026` require review. The quotation must include a supported shipment-date label; an expiry or deadline quotation cannot establish an actual on-board date.
+
+Model numeric values must remain ungrouped plain decimal strings. Source quotations support comma-grouped thousands (Western and Indian grouping), single spaces/nonbreaking spaces/narrow nonbreaking spaces, dot decimals, and unambiguous supported decimal-comma formats. Trailing decimal zeroes compare numerically. A bare `18.000` is ambiguous and is rejected without a locale. The comma-only three-digit-group convention treats `18,000` as eighteen thousand; documents using three-place decimal commas need manual review. Malformed grouping, negative/accounting amounts, exponent notation and embedded identifier fragments cannot supply positive numeric matches.
+
+Whitespace matching preserves multiple spaces, tabs and line breaks between digits, so a model cannot collapse visibly separate numeric columns into a grouped value. A single ordinary space may still represent either grouping or adjacent content; without layout coordinates this cannot be fully resolved. Human source review remains required. These checks validate cited evidence; they do not independently verify image-only quotations or discover conflicts the extractor omitted.
+
+Validation: 32 automated tests pass, including a full parser test on a real fictional PDF with a mocked response containing a wrong date. All 75 nonempty source-backed values in the existing text-based development cases pass. These are deterministic checks, not a new live AI accuracy measurement.
