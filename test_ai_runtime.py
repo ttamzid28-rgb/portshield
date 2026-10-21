@@ -102,7 +102,8 @@ class RuntimeTests(unittest.TestCase):
         stream=io.BytesIO();writer.write(stream)
         raw={'candidates':[{'finishReason':'STOP','content':{'parts':[{'text':json.dumps({'fields':[None,{'field':'invoice_total','value':None,'document':1,'page':1,'quote':'Total 10'}]})}]}}]}
         with patch('extraction.capability_check'),patch('extraction.request_json',return_value=raw):
-            with self.assertRaises(Failure) as cm:extract_ai([('invoice.pdf',stream.getvalue())],'key',['invoice_total'],'Gemini','gemini-3.8-flash',context())
-        self.assertEqual(cm.exception.category,'SOURCE_VALIDATION')
+            values,evidence=extract_ai([('invoice.pdf',stream.getvalue())],'key',['invoice_total'],'Gemini','gemini-3.8-flash',context())
+        self.assertEqual(values['invoice_total'],'')
+        self.assertEqual(evidence['_field_states']['invoice_total']['status'],'rejected')
 
 if __name__=='__main__':unittest.main()
