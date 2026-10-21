@@ -5,6 +5,7 @@ from pathlib import Path
 import streamlit as st
 from pypdf import PdfReader
 from checks import audit
+from field_states import review_fields
 from ai_runtime import run_job, DEFAULT_MODELS, DEADLINE_SECONDS
 
 st.set_page_config(page_title='PortShield AI | Document Readiness',page_icon='🛡️',layout='wide')
@@ -15,7 +16,7 @@ st.markdown("""<style>
 .stagebar{padding:12px 16px;background:#e5f3f1;border:1px solid #c5e3df;border-radius:8px;color:#146c63;margin-bottom:18px}
 </style>""",unsafe_allow_html=True)
 st.markdown('<div class="hero"><div class="eyebrow">PORTSHIELD AI / IMPORT OPERATIONS</div><h1>Trade document review workbench</h1><p>Find conflicts. Review the evidence. Prepare corrections before submission.</p></div>',unsafe_allow_html=True)
-st.caption('LIVE PROTOTYPE v0.8 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
+st.caption('LIVE PROTOTYPE v0.9 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
 fields=['lc_currency','lc_amount','latest_shipment_date','invoice_currency','invoice_total','invoice_quantity','unit_price','packing_quantity','packing_container','bl_container','on_board_date']
 base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'ABCD1234567','bl_container':'ABCD1234568','on_board_date':'2026-10-21'}
 fixed={**base,'invoice_total':'25000','bl_container':'ABCD1234567'}
@@ -33,7 +34,7 @@ with st.sidebar:
     st.download_button('Download sample PDFs',(Path(__file__).parent / 'sample_documents.zip').read_bytes(),'portshield-sample-documents.zip','application/zip')
     st.caption('Upload the sample PDFs below to exercise actual text extraction. Other layouts may need manual entry.')
 overview,upload,review,actions,about=st.tabs(['Shipment overview','Document intake','Review & evidence','Corrections & report','Scope & roadmap'])
-current=audit(st.session_state.fields)
+current=audit(st.session_state.fields, st.session_state.evidence.get('_field_states'))
 if st.session_state.get('ai_pending'):
     current=[{**r,'status':'Incomplete','evidence':'AI-extracted fields await human confirmation.'} for r in current]
 with overview:
@@ -150,45 +151,55 @@ with upload:
             st.download_button('Download benchmark extraction record',json.dumps(run,indent=2),'portshield-'+run['case_id']+'-extraction.json','application/json')
     st.divider()
     if st.button('Extract uploaded text',disabled=use_demo):
-        extracted={}; evidence={}
+        extracted={}; evidence={}; conflicts=set(); unreadable=False; labelled_candidates={k:[] for k in fields}
         if not files:st.warning('Upload at least one PDF.')
         for f in files or []:
             try:
                 reader=PdfReader(io.BytesIO(f.getvalue()))
-                if len(reader.pages)>50:st.warning(f'{f.name}: limit 50 pages');continue
+                if len(reader.pages)>50:unreadable=True;st.warning(f'{f.name}: limit 50 pages');continue
                 for n,p in enumerate(reader.pages,1):
                     text=p.extract_text() or ''
+                    if not text.strip():unreadable=True
                     for key in fields:
                         label=key.replace('_',' ')
-                        match=re.search(r'(?im)^\s*'+re.escape(label)+r'\s*:\s*([^\n\r]+)',text)
-                        if match:
+                        for match in re.finditer(r'(?im)^\s*'+re.escape(label)+r'\s*:\s*([^\n\r]+)',text):
                             value=match.group(1).strip()
-                            if key in extracted and extracted[key]!=value:extracted[key]='';evidence[key]='Conflicting extracted values: manual confirmation required'
+                            labelled_candidates[key].append({'value':value,'quote':match.group(0).strip(),'filename':f.name,'page':n})
+                            if key in conflicts or (key in extracted and extracted[key]!=value):
+                                conflicts.add(key);extracted[key]='';evidence[key]='Conflicting extracted values: manual confirmation required'
                             else:extracted[key]=value;evidence[key]=f'{f.name} · page {n} · {match.group(0).strip()}'
-            except Exception:st.warning(f'Could not read {f.name}. Please use an unencrypted text PDF.')
+            except Exception:
+                unreadable=True
+                st.warning(f'Could not read {f.name}. Please use an unencrypted text PDF.')
         if files:
+            evidence['_field_states']={k:{'status':'conflicting' if k in conflicts else 'extracted' if extracted.get(k) else 'unreadable' if unreadable else 'missing', 'reason':'Labelled extraction; unreadable means incomplete packet text coverage, not proven field location.', 'candidates':labelled_candidates[k], 'review_status':'pending'} for k in fields}
             st.session_state.previous=st.session_state.pop('results',st.session_state.get('previous',[]))
-            st.session_state.ai_pending=False;st.session_state.fields={k:extracted.get(k,'') for k in fields};st.session_state.evidence=evidence
-            st.success(f'Extracted {len(extracted)} labelled fields. Open Review workspace to confirm and run checks.')
+            st.session_state.ai_pending=True;st.session_state.fields={k:extracted.get(k,'') for k in fields};st.session_state.evidence=evidence
+            st.rerun()
 with review:
     st.subheader('Review extracted fields')
     st.caption('Amounts use the same currency; quantities use the same unit. The configured amount limit must include any applicable tolerance. No prior credit utilisation is modelled.')
     if st.session_state.get('ai_pending'):
-        st.warning('AI extraction complete. Verify every value against the PDFs before confirming. Credit amount is the extracted face value; review tolerances separately.')
+        st.warning('Extraction complete. Verify every value against the PDFs before confirming. Credit amount is the extracted face value; review tolerances separately.')
+    states=st.session_state.evidence.get('_field_states',{})
+    if states:
+        st.dataframe([{'Field':k,'Extraction state':r['status'],'Review':r['review_status'],'Reason':r['reason']} for k,r in states.items()],hide_index=True,use_container_width=True)
     with st.expander('Source extraction evidence',expanded=st.session_state.get('ai_pending',False)):
         for key,source in st.session_state.evidence.items():
-            st.text(key+' — '+source)
+            st.json(source) if isinstance(source,dict) else st.text(key+' — '+source)
     with st.form('review_form'):
         vals={};cols=st.columns(3)
         for i,k in enumerate(fields):
             with cols[i%3]:vals[k]=st.text_input(k.replace('_',' ').title(),value=st.session_state.fields.get(k,''))
-        confirmed=st.checkbox('I have checked the extracted values against the source PDFs.') if st.session_state.get('ai_pending') else True
+        confirmed=st.checkbox('I have checked all populated values, including corrections, against the source PDFs.')
         submitted=st.form_submit_button('Run document checks',type='primary')
     if submitted and not confirmed:st.warning('Confirm the extracted values before running checks.')
     if submitted and confirmed:
         st.session_state.ai_pending=False
         st.session_state.previous=st.session_state.get('results',st.session_state.get('previous',[]))
-        st.session_state.results=audit(vals);st.session_state.fields=vals
+        reviewed=review_fields(vals,st.session_state.evidence.get('_field_states',{}))
+        st.session_state.evidence['_field_states']=reviewed
+        st.session_state.results=audit(vals,reviewed);st.session_state.fields=vals
         st.rerun()
     if 'results' in st.session_state:
         results=st.session_state.results
@@ -202,7 +213,7 @@ with review:
                 st.write(result['evidence']);st.caption('Evidence refers to confirmed values; edits require reviewer verification against the source.')
         with st.expander('Source extraction evidence'):
             for k,v in st.session_state.evidence.items():st.write(f'**{k}**: {v}')
-        report={'prototype':'PortShield v0.8','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
+        report={'prototype':'PortShield v0.9','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
         st.download_button('Download review report (JSON)',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with actions:
     st.subheader('Correction desk')
@@ -230,7 +241,7 @@ with actions:
             lines.extend([r['check'],r['evidence'],'Suggested owner: '+owner,'Requested action: '+action,''])
         draft='Subject: Document review - please confirm outstanding items\n\nPlease review the items below against the actual shipment and credit terms. Confirm the appropriate correction or escalation before final submission.\n\n'+'\n'.join(lines)
         st.download_button('Download correction-request draft',draft,'portshield-correction-request.txt','text/plain')
-        report={'prototype':'PortShield v0.8','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
+        report={'prototype':'PortShield v0.9','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
         st.download_button('Download full review data',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with about:
     st.subheader('Working today')
