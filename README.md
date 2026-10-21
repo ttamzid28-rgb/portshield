@@ -54,3 +54,36 @@ Model numeric values must remain ungrouped plain decimal strings. Source quotati
 Whitespace matching preserves multiple spaces, tabs and line breaks between digits, so a model cannot collapse visibly separate numeric columns into a grouped value. A single ordinary space may still represent either grouping or adjacent content; without layout coordinates this cannot be fully resolved. Human source review remains required. These checks validate cited evidence; they do not independently verify image-only quotations or discover conflicts the extractor omitted.
 
 Validation: 32 automated tests pass, including a full parser test on a real fictional PDF with a mocked response containing a wrong date. All 75 nonempty source-backed values in the existing text-based development cases pass. These are deterministic checks, not a new live AI accuracy measurement.
+
+### Field lifecycle contract (v0.9)
+
+Extraction keeps the existing `(values, evidence)` return shape. `evidence['_field_states']`
+is now a dictionary, unlike the other evidence strings. Each field contains:
+`status`, `reason`, `candidates`, and `review_status`. Candidate records retain the model's
+value, quote, document/page, validation status and rejection reason.
+
+- `missing`: no candidate returned; this does **not** establish absence from the source.
+- `unreadable`: a cited page has no independently readable text. Vision candidates stay
+  blank until visual review. In labelled-text mode this can instead mean incomplete
+  packet text coverage; the reason explains that distinction.
+- `rejected`: candidate failed source/value validation. A later valid candidate cannot
+  silently hide this state.
+- `conflicting`: distinct validated values were returned; later repetitions cannot clear it.
+- `extracted`: a source-linked candidate awaits human confirmation.
+
+Review confirmation records `review_status` (`confirmed` or `unresolved`) and
+`reviewed_value`, preserving the extraction state and candidates. Blank fields remain
+unresolved. `audit(values, states)` only uses confirmed, unchanged values; legacy callers
+without states retain their previous behavior. The bundled fictional sample is such a
+legacy fixture. Both AI and labelled-text intake require explicit human confirmation.
+Reports and benchmark records include the state dictionary. This is session evidence,
+not an immutable audit trail or authenticated reviewer signature.
+
+A valid response with no accepted values now loads a blank, diagnosable review packet
+instead of throwing away per-field rejection details. Transport/schema failures still
+leave the previous workspace unchanged. OpenRouter's OCR-required packet failure remains
+unchanged. Models can omit conflicts entirely; these states do not establish completeness.
+
+UI integration handoff: render extraction status separately from review status, retain
+candidate provenance, and do not treat `extracted` as `confirmed`. No provider calls are
+needed for lifecycle regression tests (`python -m unittest discover -s . -p 'test_*.py'`).
