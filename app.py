@@ -7,6 +7,7 @@ from pypdf import PdfReader
 from checks import audit
 from field_states import review_fields
 from ai_runtime import run_job, DEFAULT_MODELS, DEADLINE_SECONDS
+from pdf_viewer import render_pdf_viewer
 
 st.set_page_config(page_title='PortShield AI | Document Readiness',page_icon='🛡️',layout='wide')
 st.markdown("""<style>
@@ -187,6 +188,7 @@ with review:
     with st.expander('Source extraction evidence',expanded=st.session_state.get('ai_pending',False)):
         for key,source in st.session_state.evidence.items():
             st.json(source) if isinstance(source,dict) else st.text(key+' — '+source)
+    render_pdf_viewer(files, st.session_state.evidence)
     with st.form('review_form'):
         vals={};cols=st.columns(3)
         for i,k in enumerate(fields):
