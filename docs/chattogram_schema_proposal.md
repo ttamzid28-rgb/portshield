@@ -10,126 +10,139 @@
 
 ## 1. Executive Summary & Purpose
 
-PortShield AI currently executes six baseline documentary compliance checks (currency alignment, quantity equality, container string equality, invoice limit compliance, invoice arithmetic verification, and shipment deadline compliance). 
+PortShield AI executes documentary compliance audits for international trade finance under **ICC UCP 600** and **ISBP 745**. This RFC specifies the canonical schema contract, field lifecycle integration, and realistic operational parameters for containerized industrial import flows through **Chattogram Sea Port (CGP), Bangladesh**.
 
-This RFC proposes the canonical schema contract and field lifecycle integration for **four additional compliance checks** tailored for high-volume containerized industrial import flows through **Chattogram Sea Port (CGP), Bangladesh**, governed by **ICC UCP 600** and **ISBP 745**:
-
-1. **Port of Discharge Consistency** (Letter of Credit vs. Ocean Bill of Lading).
-2. **Cargo Gross Weight Consistency** (Packing List vs. Ocean Bill of Lading), isolating cargo gross mass from packaging tare, container tare, and Verified Gross Mass (VGM).
-3. **ISO 6346 Container Check Digit Verification** (Equipment identifier mathematical checksum validation).
-4. **Goods Description Conformity** (Commercial Invoice vs. Letter of Credit Tag 45A under UCP 600 Article 18c).
-
-All proposed fields and rules integrate into PortShield's existing `field_states.py` and `evidence` infrastructure **without breaking changes** to active extraction models or downstream UI components.
+The architecture enforces a strict **canonical naming convention** (`<doc_prefix>_<field_name>`), establishes realistic operational weights within ISO/CSC container ratings, isolates cargo mass from container tare and SOLAS Verified Gross Mass (VGM), and specifies non-breaking integration with [`field_states.py`](file:///D:/Projects/portshield-1/field_states.py) and [`checks.py`](file:///D:/Projects/portshield-1/checks.py).
 
 ---
 
-## 2. Field Definitions, Canonical Types, and Normalization Contracts
+## 2. Document Provenance & Canonical Naming Contract
 
-### 2.1 `port_of_discharge` (BL, LC)
+All extracted and validated trade fields strictly follow a `<document_prefix>_<field_name>` format reflecting source document provenance:
 
-| Property | Specification |
-| :--- | :--- |
-| **Field Name** | `port_of_discharge` |
-| **Source Documents** | Ocean Bill of Lading (BL), Letter of Credit (LC Tag 44F) |
-| **Canonical Type** | `STRING` (Normalized Port Identity) |
-| **Extraction Format** | Contiguous substring containing the port name, country, and optional UN/LOCODE |
-| **Normalization Pipeline** | Casefolded (`casefold()`), stripped of punctuation, with alias resolution table: `{"chattogram", "chittagong", "cgp", "bdcgp"} -> "CHATTOGRAM SEA PORT"` |
+| Document Prefix | Document Name | File Reference | Sequence Index | Typical Source Authority |
+| :--- | :--- | :--- | :---: | :--- |
+| `ci_` | Commercial Invoice | `commercial_invoice.pdf` | Document 1 | Beneficiary / Exporter |
+| `pl_` | Packing List | `packing_list.pdf` | Document 2 | Exporter / Warehouse / Packer |
+| `bl_` | Ocean Bill of Lading | `bill_of_lading.pdf` | Document 3 | Ocean Carrier / Vessel Agent |
+| `lc_` | Letter of Credit (MT700) | `letter_of_credit.pdf` | Document 4 | Issuing Bank / SWIFT Network |
 
-#### Critical Compliance Invariant:
-Under maritime multimodal transport to Bangladesh, the **Port of Discharge** (sea port where the container vessel unberths, e.g., *Chattogram Sea Port*) must be strictly distinguished from the **Place of Final Delivery** (inland destination, e.g., *Dhaka Inland Container Depot*). A document confusing Place of Delivery with Port of Discharge, or designating an unauthorized discharge port (e.g., *Mongla Port* when the credit stipulates *Chattogram*), constitutes a major documentary discrepancy.
+### 2.1 Complete Canonical Field Registry
+
+```
++-- Ports
+|   +-- lc_port_of_discharge         (LC Tag 44F)
+|   +-- bl_port_of_discharge         (BL Port of Discharge)
+|   +-- bl_place_of_delivery         (BL Place of Final Delivery)
+|   +-- bl_port_of_loading           (BL Port of Loading)
+|
++-- Weights & Units
+|   +-- pl_cargo_gross_weight        (PL Total Cargo Gross Weight)
+|   +-- pl_cargo_gross_weight_unit   (PL Weight Unit: KGS)
+|   +-- bl_cargo_gross_weight        (BL Total Cargo Gross Weight)
+|   +-- bl_cargo_gross_weight_unit   (BL Weight Unit: KGS)
+|   +-- ci_cargo_net_weight          (CI Stated Net Weight)
+|   +-- ci_cargo_net_weight_unit     (CI Weight Unit: KGS)
+|   +-- pl_cargo_net_weight          (PL Stated Net Weight)
+|   +-- pl_cargo_net_weight_unit     (PL Weight Unit: KGS)
+|
++-- Goods Description
+|   +-- ci_goods_description         (CI Description of Goods)
+|   +-- lc_goods_description         (LC Tag 45A Goods Description)
+|
++-- Identifiers
+|   +-- pl_container_number          (PL Container Identification)
+|   +-- bl_container_number          (BL Container Identification)
+|
++-- Financials
+|   +-- ci_invoice_total             (CI Total Payable Amount)
+|   +-- ci_currency                  (CI Currency Code: ISO 4217)
+|   +-- ci_unit_price                (CI Unit Price)
+|   +-- ci_quantity                  (CI Commercial Quantity)
+|   +-- lc_amount                    (LC Tag 32B Face Amount)
+|   +-- lc_currency                  (LC Tag 32B Currency Code)
+|
++-- Shipment Dates
+    +-- lc_latest_shipment_date      (LC Tag 44C Shipment Deadline)
+    +-- bl_on_board_date             (BL Shipped on Board Date)
+```
 
 ---
 
-### 2.2 `cargo_gross_weight` & `gross_weight_unit` (PL, BL)
+## 3. Operational Equipment Specifications & Weight Feasibility
 
-| Property | Specification |
-| :--- | :--- |
-| **Field Name** | `cargo_gross_weight`, `gross_weight_unit` |
-| **Source Documents** | Packing List (PL), Ocean Bill of Lading (BL) |
-| **Canonical Type** | `Decimal` string (`cargo_gross_weight`), `STRING` ISO/metric symbol (`gross_weight_unit`) |
-| **Normalized Units** | Canonical unit is `KG` (or `KGS`, `MT` with 1 MT = 1,000 KG conversion factor) |
-| **Validation Regex** | `^[0-9]+(?:\.[0-9]+)?$` (plain decimal, no thousand separators) |
+### 3.1 40-foot High-Cube (40' HC) Container Rating Limits
+Standard ISO 668 / CSC (Convention for Safe Containers) ratings establish maximum container gross ratings:
+- **Maximum Gross Mass (Rating)**: $32,500\text{ KG}$ (or $30,480\text{ KG}$ for standard ISO containers).
+- **Empty Container Box Tare**: $3,800\text{ KG}$ (for steel 40' HC).
+- **Maximum Payload Capacity**: $\approx 28,700\text{ KG}$.
 
-#### Isolation from Container Tare and SOLAS VGM:
-A common source of false discrepancies in automated audit engines is comparing container tare weight (e.g., 3,800 KG for a 40' HC) or SOLAS Verified Gross Mass (VGM, e.g., 47,000 KG) against cargo gross mass (43,200 KG). 
-
-The schema strictly isolates:
-$$\text{Cargo Net Weight} + \text{Packaging Tare (Pallets/Bags)} = \text{Cargo Gross Weight}$$
-$$\text{Cargo Gross Weight} + \text{Container Tare Weight} = \text{Verified Gross Mass (VGM)}$$
-
-The compliance check evaluates:
-$$\text{PL Cargo Gross Weight} == \text{BL Cargo Gross Weight}$$
-This successfully catches transposition errors (e.g., 43,200 KG on PL vs. 42,300 KG on BL, a 900 KG shortage discrepancy) while preventing false alerts from container tare.
-
----
-
-### 2.3 `cargo_net_weight` & `net_weight_unit` (PL, CI)
-
-| Property | Specification |
-| :--- | :--- |
-| **Field Name** | `cargo_net_weight`, `net_weight_unit` |
-| **Source Documents** | Packing List (PL), Commercial Invoice (CI) |
-| **Canonical Type** | `Decimal` string, normalized unit (`KG`, `MT`) |
-| **Relationship** | Must equal commercial goods quantity when invoice unit of measure is weight |
-
----
-
-### 2.4 `container_number` (PL, BL) & ISO 6346 Check Digit Algorithm
-
-| Property | Specification |
-| :--- | :--- |
-| **Field Name** | `container_number` (or `packing_container`, `bl_container`) |
-| **Source Documents** | Packing List (PL), Ocean Bill of Lading (BL) |
-| **Canonical Format** | Standardized 11-character string: `[A-Z]{3}[UJZ][0-9]{7}` (e.g. `MEDU1000060`) |
-| **Component Breakdown** | `Owner Code` (3 letters) + `Equipment Category` (1 letter: U/J/Z) + `Serial Number` (6 digits) + `Check Digit` (1 digit) |
-
-#### ISO 6346 Check Digit Mathematical Formulation:
-Each character in the 10-character prefix ($c_0, c_1, \dots, c_9$) is mapped to an integer value $V(c_i)$ according to the ISO 6346 lookup table (where multiples of 11 are excluded):
+### 3.2 Harmonized Demonstration Baseline
+To reflect realistic operations without exceeding safe transport limits, the demonstration fixtures adopt a **20.00 Metric Ton (20,000 KG)** net resin shipment:
 
 $$\begin{aligned}
-\text{Digits } 0\text{--}9 &\to 0\text{--}9 \\
-\text{Letters } A\text{--}Z &\to [A=10, B=12, C=13, D=14, E=15, F=16, G=17, H=18, I=19, \\
-&\quad J=20, K=21, L=23, M=24, N=25, O=26, P=27, Q=28, \\
-&\quad R=29, S=30, T=31, U=32, V=34, W=35, X=36, Y=37, Z=38]
+\text{Cargo Net Weight} &= 20,000.00\text{ KGS} \quad (800\text{ bags } @\ 25.00\text{ KG}) \\
+\text{Packaging Tare} &= 1,600.00\text{ KGS} \quad (20\text{ pallets } @\ 75\text{ KG} + \text{bags/shrinkwrap}) \\
+\mathbf{\text{Cargo Gross Weight}} &= \mathbf{21,600.00\text{ KGS}} \quad (\text{Clean Baseline \& PL}) \\
+\text{Container Box Tare} &= 3,800.00\text{ KGS} \quad (40\text{' HC empty}) \\
+\mathbf{\text{Verified Gross Mass (VGM)}} &= \mathbf{25,400.00\text{ KGS}} \quad (25.4\text{ MT} \le 32.5\text{ MT rating})
 \end{aligned}$$
 
-Each character value is multiplied by a positional weight $2^i$:
-$$S = \sum_{i=0}^{9} V(c_i) \cdot 2^i$$
+### 3.3 Financial Alignment & 5% LC Tolerance
+$$\begin{aligned}
+\text{Invoice Commercial Quantity} &= 20,000\text{ KGS} \\
+\text{Unit Price} &= \text{USD } 1.25\text{ / KG} \\
+\mathbf{\text{Invoice Total}} &= \mathbf{\text{USD } 25,000.00} \\
+\text{LC Tolerance (Tag 39A)} &= +5\% / -5\% \\
+\mathbf{\text{LC Face Amount (Tag 32B)}} &= \mathbf{\text{USD } 26,250.00} \quad (\text{USD } 25,000 \times 1.05)
+\end{aligned}$$
 
-The calculated check digit $CD$ is:
-$$R = S \pmod{11}$$
-$$CD = 0 \quad \text{if } R = 10, \quad \text{else } CD = R$$
-
-#### Mathematical Walkthrough for Clean Container `MEDU1000060`:
-- Prefix: `M`, `E`, `D`, `U`, `1`, `0`, `0`, `0`, `0`, `6`
-- Values: $24, 15, 14, 32, 1, 0, 0, 0, 0, 6$
-- Weights: $1, 2, 4, 8, 16, 32, 64, 128, 256, 512$
-- Weighted Sum:
-  $$S = (24 \cdot 1) + (15 \cdot 2) + (14 \cdot 4) + (32 \cdot 8) + (1 \cdot 16) + (0) + (0) + (0) + (0) + (6 \cdot 512)$$
-  $$S = 24 + 30 + 56 + 256 + 16 + 3072 = 3454$$
-- Modulus:
-  $$3454 \div 11 = 314 \text{ remainder } 0$$
-  $$CD = 0$$
-- Result: **VALID** (`MEDU1000060`).
-- Discrepancy Case: When stated as `MEDU1000067`, $CD_{\text{stated}} = 7 \neq 0 \implies$ **INVALID CHECK DIGIT**.
+### 3.4 Discrepancy Modeling (900 KG Transposition)
+In the discrepancy packet:
+- `pl_cargo_gross_weight`: **21,600.00 KGS**
+- `bl_cargo_gross_weight`: **20,700.00 KGS**
+- **Discrepancy**: $21,600 - 20,700 = 900.00\text{ KGS}$ transposition/typo shortage.
+- **VGM on Discrepant BL**: $20,700 + 3,800 = 24,500.00\text{ KGS}$.
+- **Isolation Guarantee**: Isolating cargo gross mass from container tare ($3,800\text{ KG}$) and VGM ($25,400\text{ KG}$) ensures the 900 KG transposition is flagged accurately without conflating tare components.
 
 ---
 
-### 2.5 `goods_description` (CI, LC)
+## 4. Compliance Check Rules Specification
 
-| Property | Specification |
-| :--- | :--- |
-| **Field Name** | `goods_description` |
-| **Source Documents** | Commercial Invoice (CI), Letter of Credit (LC Tag 45A) |
-| **Canonical Type** | Normalized text string |
-| **Compliance Rule** | **UCP 600 Article 18(c)**: "The description of the goods, services or performance in a commercial invoice must correspond with that in the credit." |
-| **Discrepancy Severity** | Critical Discrepancy. For instance, L/C specifies *High Density Polyethylene (HDPE) Resin Grade HD5010*, but Invoice lists *Linear Low Density Polyethylene (LLDPE) Film Grade*. |
+### 4.1 Existing Baseline Checks (Mapped to Engine Format)
+| Engine Rule | Evaluated Canonical Fields | Clean Evaluation | Discrepancy Evaluation |
+| :--- | :--- | :--- | :--- |
+| `Currency` | `lc_currency` vs. `ci_currency` | `USD == USD` (Passed) | `USD == USD` (Passed) |
+| `Quantity (same unit required)` | `ci_quantity` vs. `pl_cargo_net_weight` | `20000 == 20000` (Passed) | `20000 == 20000` (Passed) |
+| `Container identifier` | `pl_container_number` vs. `bl_container_number` | `MEDU1000060 == MEDU1000060` (Passed) | `MEDU1000067 == MEDU1000067` (Passed) |
+| `Invoice amount limit` | `ci_invoice_total` vs. `lc_amount` | `25000.00 <= 26250.00` (Passed) | `25000.00 <= 26250.00` (Passed) |
+| `Invoice arithmetic` | `ci_invoice_total` vs. `ci_quantity * ci_unit_price` | `25000 == 20000 * 1.25` (Passed) | `25000 == 20000 * 1.25` (Passed) |
+| `Shipment deadline` | `bl_on_board_date` vs. `lc_latest_shipment_date` | `2026-11-10 <= 2026-11-15` (Passed) | `2026-11-10 <= 2026-11-15` (Passed) |
+
+### 4.2 Future Compliance Checks
+1. **Port of Discharge Consistency**:
+   - Compares `bl_port_of_discharge` against `lc_port_of_discharge`.
+   - Clean: `Chattogram Sea Port, Bangladesh == Chattogram Sea Port, Bangladesh` -> **Passed**.
+   - Discrepancy: `Mongla Port, Bangladesh != Chattogram Sea Port, Bangladesh` -> **Review required**.
+   - Distinct from `bl_place_of_delivery` (`Dhaka, Bangladesh`).
+2. **Cargo Gross Weight Consistency**:
+   - Compares `pl_cargo_gross_weight` against `bl_cargo_gross_weight`.
+   - Clean: `21600 == 21600` -> **Passed**.
+   - Discrepancy: `21600 != 20700` ($\Delta = 900\text{ KG}$) -> **Review required**.
+3. **ISO 6346 Container Check Digit Verification**:
+   - Evaluates modulus 11 checksum on `bl_container_number` and `pl_container_number`.
+   - Clean: `MEDU1000060`: computed check digit $0 == 0$ -> **Passed**.
+   - Discrepancy: `MEDU1000067`: computed check digit $0 \neq 7$ -> **Review required**.
+4. **Goods Description Conformity (UCP 600 Art. 18c)**:
+   - Compares `ci_goods_description` against `lc_goods_description`.
+   - Clean: Both specify *Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010* -> **Passed**.
+   - Discrepancy: Invoice lists *Linear Low Density Polyethylene (LLDPE) Film Grade* -> **Review required**.
 
 ---
 
-## 3. Integration with `field_states` and Evidence Pipeline
+## 5. Field Lifecycle & Reviewer Confirmation Pipeline
 
-The existing PortShield field lifecycle in `field_states.py` maintains five rigorous states:
+The PortShield field lifecycle in [`field_states.py`](file:///D:/Projects/portshield-1/field_states.py) preserves original model extraction state while maintaining human confirmation state separately:
 
 ```
 [missing] ──(Candidate Returned)──> [extracted] ──(Validation Failed)──> [rejected]
@@ -141,64 +154,22 @@ The existing PortShield field lifecycle in `field_states.py` maintains five rigo
                                           └──(Human Confirmation)──────> [confirmed]
 ```
 
-### 3.1 Non-Breaking Candidate Collection
-When the model extracts candidates for the new fields, `collect_fields(entries, field_names, packet, page_text)` processes them through `validate_value(key, value, quote)`.
-
-1. **Unrecognized / Future Fields**: If `field_names` includes `cargo_gross_weight`, `port_of_discharge`, or `goods_description`, `collect_fields` instantiates their records in `states` with initial status `missing`.
-2. **Quote Verification**: All candidate quotations are verified against the cited document and page via `normalized(quote) in normalized(page_text[(doc, page)])`.
-3. **Evidence Storage**: Quotes and page citations are appended to `evidence[key]` and indexed in `evidence['_field_states'][key]['candidates']`.
-4. **Human Confirmation Pipeline**: Downstream functions (`review_fields`, `usable_values`) consume confirmed values without modification.
-
-### 3.2 Evidence Structure Example
-```json
-{
-  "_field_states": {
-    "cargo_gross_weight": {
-      "status": "extracted",
-      "reason": "Source-linked candidate; human confirmation required.",
-      "review_status": "pending",
-      "candidates": [
-        {
-          "value": "43200",
-          "unit": "KGS",
-          "quote": "Cargo Gross Weight: 43,200.00 KGS",
-          "document": 2,
-          "page": 1,
-          "status": "extracted",
-          "validated_value": "43200"
-        }
-      ]
-    }
-  },
-  "cargo_gross_weight": "packing_list.pdf · page 1 · AI-cited text (verify): Cargo Gross Weight: 43,200.00 KGS"
-}
-```
+### Reviewer Confirmation Invariant
+1. **Separation of Extraction State and Review State**:
+   - `status`: Preserves the immutable extraction state (`extracted`, `rejected`, `unreadable`, `conflicting`, `missing`).
+   - `review_status`: Records human review disposition (`pending`, `confirmed`, `unresolved`).
+   - `reviewed_value`: Contains the human-audited value if modified or confirmed.
+2. **Provenance & Candidate Audit Trail**:
+   - The original AI candidate quote, document index, and page number remain stored in `evidence['_field_states'][field]['candidates']`.
+   - Human review edits never overwrite or erase original candidate quotes or provenance manifests.
+   - Usable values consumed by [`checks.py:audit()`](file:///D:/Projects/portshield-1/checks.py#L4-L28) require `review_status == 'confirmed'` when field states are active.
 
 ---
 
-## 4. Planned Compliance Audit Engine Rules (`checks.py`)
+## 6. Verification & Test Guarantees
 
-When the compliance rules are implemented in the next phase, they will be registered into `audit(d, field_states=None)`:
-
-```python
-# Planned Rule 7: Port of Discharge Consistency
-compare('Port of discharge consistency', 'lc_port_of_discharge', 'bl_port_of_discharge')
-
-# Planned Rule 8: Cargo Gross Weight Consistency
-compare_numeric('Cargo gross weight consistency', 'packing_gross_weight', 'bl_gross_weight')
-
-# Planned Rule 9: ISO 6346 Container Check Digit
-validate_iso_6346('ISO 6346 check digit', 'bl_container')
-
-# Planned Rule 10: Goods Description Conformity
-compare_goods_description('Goods description conformity', 'lc_goods_description', 'invoice_goods_description')
-```
-
----
-
-## 5. Backward Compatibility & Test Guarantees
-
-1. **Active Core Code Untouched**: No changes are made to `app.py`, `checks.py`, `field_states.py`, `ai_runtime.py`, or `benchmark_data.json`.
-2. **Full Baseline Suite Passing**: All 60 existing unit tests pass without warning.
-3. **Reproducibility**: All 12 demonstration PDFs can be deterministically regenerated via `py scripts/generate_chattogram_packets.py`.
-4. **Answer Key Parity**: `fixtures/chattogram_answer_keys.json` serves as the single source of truth for both human audit and automated CI testing.
+1. **Deterministic Regeneration**: All 12 demonstration PDFs compile deterministically via `py scripts/generate_chattogram_packets.py`.
+2. **Multi-Page SWIFT MT700**: Letter of Credit paginates dynamically into 2 pages, rendering all tags through Tag 49 (`WITHOUT`) with watermark banners on every page.
+3. **Behavioral Engine Execution**: Unit tests in [`test_chattogram_fixtures.py`](file:///D:/Projects/portshield-1/test_chattogram_fixtures.py) execute [`checks.py:audit()`](file:///D:/Projects/portshield-1/checks.py#L4-L28) on parsed answer-key values, asserting live `"Passed"` statuses.
+4. **Direct Weight Calculation**: Unit tests directly evaluate `float(pl_gross) - float(bl_gross) == 900.0`.
+5. **Exact Verbatim Citations**: 100% of answer-key quotations are verified verbatim in PDF page text layers via `pdf_viewer.locate_quote_on_page`.
