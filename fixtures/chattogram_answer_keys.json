@@ -1,0 +1,779 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.1.0",
+  "dataset": "portshield-chattogram-demonstration",
+  "description": "Ground truth answer keys, canonical field citations, and compliance audit expected outcomes for Chattogram demonstration packets under standardized <doc_prefix>_<field_name> naming contract.",
+  "metadata": {
+    "buyer": "Bengal Polymer Industries Ltd., Dhaka, Bangladesh",
+    "seller": "Busan Petrochemical Corporation, Busan, South Korea",
+    "issuing_bank": "Eastern Bank PLC, Dhaka, Bangladesh",
+    "advising_bank": "KEB Hana Bank, Busan Branch, South Korea",
+    "lc_number": "26DC01EBL789012",
+    "invoice_number": "BPC-INV-2026-9042",
+    "packing_list_number": "BPC-PL-2026-9042",
+    "bl_number": "EHCL-CGP-2026-8841",
+    "synthetic_banner": "FICTIONAL DEMONSTRATION DOCUMENT - FOR TESTING ONLY - NO COMMERCIAL OR BANKING VALUE",
+    "document_provenance_mapping": {
+      "ci": {
+        "index": 1,
+        "filename": "commercial_invoice.pdf",
+        "description": "Commercial Invoice issued by beneficiary"
+      },
+      "pl": {
+        "index": 2,
+        "filename": "packing_list.pdf",
+        "description": "Packing List detailing packaging, weights, and container specification"
+      },
+      "bl": {
+        "index": 3,
+        "filename": "bill_of_lading.pdf",
+        "description": "Ocean Bill of Lading issued by carrier agent"
+      },
+      "lc": {
+        "index": 4,
+        "filename": "letter_of_credit.pdf",
+        "description": "SWIFT MT700 Documentary Credit issued by opening bank"
+      }
+    },
+    "canonical_to_runtime_adapter_mapping": {
+      "ci_invoice_total": "invoice_total",
+      "ci_currency": "invoice_currency",
+      "ci_quantity": "invoice_quantity",
+      "ci_unit_price": "unit_price",
+      "pl_cargo_net_weight": "packing_quantity",
+      "pl_container_number": "packing_container",
+      "bl_container_number": "bl_container",
+      "lc_amount": "lc_amount",
+      "lc_currency": "lc_currency",
+      "lc_latest_shipment_date": "latest_shipment_date",
+      "bl_on_board_date": "on_board_date"
+    },
+    "weight_tolerance_policy": {
+      "max_weight_delta_kg": 10.0,
+      "rule": "abs(pl_cargo_gross_weight - bl_cargo_gross_weight) <= max_weight_delta_kg",
+      "demonstration_discrepancy_delta_kg": 900.0
+    },
+    "lc_financial_tolerance_policy": {
+      "commercial_invoice_total_usd": 25000.00,
+      "lc_face_amount_usd": 26250.00,
+      "stated_positive_tolerance_pct": 5.0,
+      "tag_39a_positive_tolerance_pct": 5.0,
+      "max_permissible_draw_usd": 27562.50,
+      "upper_limit_usd": 27562.50,
+      "current_engine_comparison_limit_usd": 26250.00,
+      "rule": "invoice_total <= lc_amount",
+      "technical_note": "The current checks.py engine evaluates invoice_total against lc_amount as an upper limit using the face amount (USD 26,250.00) and does not yet evaluate SWIFT Tag 39A tolerance. The arithmetic check verifies invoice_total <= lc_amount ($25,000 <= $26,250) and is not a complete bank-compliance credit determination."
+    },
+    "review_status_enum": [
+      "pending",
+      "confirmed",
+      "unresolved"
+    ],
+    "field_lifecycle_note": "Reviewer confirmation preserves original model extraction state (status: 'missing', 'extracted', 'unreadable', 'rejected', 'conflicting', 'manual') while recording review_status ('pending', 'confirmed', 'unresolved') separately. When a human reviewer edits a value, it transitions to 'confirmed' upon reviewer submission."
+  },
+  "packets": {
+    "chattogram_clean": {
+      "packet_id": "chattogram_clean",
+      "packet_name": "Chattogram Clean Baseline Packet",
+      "status": "compliant",
+      "description": "Baseline fully compliant trade packet for 20,000 KG of HDPE resin in 1x40ft HC container (VGM 25,400 KG). All 6 existing checks and 4 future checks pass.",
+      "discrepancies": [],
+      "extracted_fields": {
+        "lc_currency": {
+          "value": "USD",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "Currency: USD Amount: USD 26,250.00"
+        },
+        "ci_currency": {
+          "value": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Currency: USD"
+        },
+        "ci_quantity": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Invoiced Quantity: 20,000 KGS"
+        },
+        "ci_unit_price": {
+          "value": "1.25",
+          "currency": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Unit Price: USD 1.25 / KG"
+        },
+        "ci_invoice_total": {
+          "value": "25000.00",
+          "currency": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Total Invoice Amount: USD 25,000.00"
+        },
+        "lc_amount": {
+          "value": "26250.00",
+          "currency": "USD",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "Currency: USD Amount: USD 26,250.00"
+        },
+        "lc_latest_shipment_date": {
+          "value": "2026-11-15",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "44C: Latest Date of Shipment: 2026-11-15"
+        },
+        "bl_on_board_date": {
+          "value": "2026-11-10",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Shipped on Board Date: 2026-11-10"
+        },
+        "pl_container_number": {
+          "value": "MEDU1000060",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Container Number: MEDU1000060"
+        },
+        "bl_container_number": {
+          "value": "MEDU1000060",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Container Number: MEDU1000060"
+        },
+        "lc_port_of_discharge": {
+          "value": "Chattogram Sea Port, Bangladesh",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "44F: Port of Discharge: Chattogram Sea Port, Bangladesh"
+        },
+        "bl_port_of_discharge": {
+          "value": "Chattogram Sea Port, Bangladesh",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Port of Discharge: Chattogram Sea Port, Bangladesh"
+        },
+        "bl_place_of_delivery": {
+          "value": "Dhaka, Bangladesh",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Place of Delivery: Dhaka, Bangladesh"
+        },
+        "bl_port_of_loading": {
+          "value": "Busan, South Korea",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Port of Loading: Busan, South Korea"
+        },
+        "pl_cargo_gross_weight": {
+          "value": "21600",
+          "unit": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "pl_cargo_gross_weight_unit": {
+          "value": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "bl_cargo_gross_weight": {
+          "value": "21600",
+          "unit": "KGS",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "bl_cargo_gross_weight_unit": {
+          "value": "KGS",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "ci_cargo_net_weight": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "ci_cargo_net_weight_unit": {
+          "value": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "pl_cargo_net_weight": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "pl_cargo_net_weight_unit": {
+          "value": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "ci_goods_description": {
+          "value": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Description of Goods: Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010"
+        },
+        "lc_goods_description": {
+          "value": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "45A: Description of Goods: Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010"
+        }
+      },
+      "compliance_checks": {
+        "existing_checks": {
+          "Currency": {
+            "status": "Passed",
+            "evidence": "lc_currency=USD; invoice_currency=USD"
+          },
+          "Quantity (same unit required)": {
+            "status": "Passed",
+            "evidence": "invoice_quantity=20000; packing_quantity=20000"
+          },
+          "Container identifier": {
+            "status": "Passed",
+            "evidence": "packing_container=MEDU1000060; bl_container=MEDU1000060"
+          },
+          "Invoice amount within configured limit": {
+            "status": "Passed",
+            "evidence": "invoice_total=25000.00; lc_amount=26250.00"
+          },
+          "Invoice arithmetic": {
+            "status": "Passed",
+            "evidence": "invoice_total=25000.00; invoice_quantity=20000; unit_price=1.25"
+          },
+          "Shipment deadline": {
+            "status": "Passed",
+            "evidence": "On board: 2026-11-10; latest: 2026-11-15"
+          }
+        },
+        "future_checks": {
+          "port_of_discharge_consistency": {
+            "status": "Passed",
+            "bl_port": "Chattogram Sea Port, Bangladesh",
+            "lc_port": "Chattogram Sea Port, Bangladesh",
+            "notes": "Port of discharge harmonized. Place of delivery distinct (Dhaka, Bangladesh)."
+          },
+          "cargo_gross_weight_consistency": {
+            "status": "Passed",
+            "pl_gross_weight": "21600",
+            "bl_gross_weight": "21600",
+            "unit": "KGS",
+            "notes": "Cargo gross weight perfectly harmonized (21,600 KGS), isolating cargo packaging tare (1,600 KGS) from container tare (3,800 KGS) and VGM (25,400 KGS)."
+          },
+          "iso_6346_check_digit": {
+            "status": "Passed",
+            "container_number": "MEDU1000060",
+            "owner_code": "MED",
+            "category": "U",
+            "serial": "100006",
+            "check_digit": 0,
+            "calculated_check_digit": 0,
+            "notes": "Check digit 0 matches mathematical calculation (sum=3454, remainder 0)."
+          },
+          "goods_description_consistency": {
+            "status": "Passed",
+            "ci_goods": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+            "lc_goods": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+            "notes": "Exact goods description alignment between CI and LC Clause 45A."
+          }
+        }
+      }
+    },
+    "chattogram_discrepancy": {
+      "packet_id": "chattogram_discrepancy",
+      "packet_name": "Chattogram Discrepancy Demonstration Packet",
+      "status": "discrepant",
+      "description": "Trade demonstration packet containing 4 intentional compliance discrepancies across 4 distinct compliance dimensions. All 6 existing baseline checks still pass.",
+      "discrepancies": [
+        {
+          "discrepancy_id": "DISC-01",
+          "dimension": "Port of Discharge",
+          "canonical_fields": ["bl_port_of_discharge", "lc_port_of_discharge"],
+          "description": "LC Tag 44F specifies 'Chattogram Sea Port, Bangladesh', but Bill of Lading lists Port of Discharge as 'Mongla Port, Bangladesh' (while Place of Delivery remains Dhaka).",
+          "impacted_documents": ["bill_of_lading.pdf", "letter_of_credit.pdf"],
+          "expected_finding": "Review required"
+        },
+        {
+          "discrepancy_id": "DISC-02",
+          "dimension": "Cargo Gross Weight",
+          "canonical_fields": ["pl_cargo_gross_weight", "bl_cargo_gross_weight"],
+          "description": "Packing List states Cargo Gross Weight = 21,600 KGS; Bill of Lading states Cargo Gross Weight = 20,700 KGS (exact 900 kg transposition/typo discrepancy: 21,600 - 900). Isolates cargo gross weight from container tare (3,800 KGS) and VGM (24,500 KGS).",
+          "impacted_documents": ["packing_list.pdf", "bill_of_lading.pdf"],
+          "expected_finding": "Review required"
+        },
+        {
+          "discrepancy_id": "DISC-03",
+          "dimension": "ISO 6346 Check Digit",
+          "canonical_fields": ["pl_container_number", "bl_container_number"],
+          "description": "Container identifier has an invalid 7th check digit: MEDU1000067 where the mathematically valid check digit is 0. Present on both PL and BL so existing equality check passes while future check digit check triggers.",
+          "impacted_documents": ["packing_list.pdf", "bill_of_lading.pdf"],
+          "expected_finding": "Review required"
+        },
+        {
+          "discrepancy_id": "DISC-04",
+          "dimension": "Goods Description",
+          "canonical_fields": ["ci_goods_description", "lc_goods_description"],
+          "description": "LC Clause 45A requires 'Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010', but Commercial Invoice states 'Linear Low Density Polyethylene (LLDPE) Film Grade' (clear HDPE vs LLDPE polymer conflict).",
+          "impacted_documents": ["commercial_invoice.pdf", "letter_of_credit.pdf"],
+          "expected_finding": "Review required"
+        }
+      ],
+      "extracted_fields": {
+        "lc_currency": {
+          "value": "USD",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "Currency: USD Amount: USD 26,250.00"
+        },
+        "ci_currency": {
+          "value": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Currency: USD"
+        },
+        "ci_quantity": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Invoiced Quantity: 20,000 KGS"
+        },
+        "ci_unit_price": {
+          "value": "1.25",
+          "currency": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Unit Price: USD 1.25 / KG"
+        },
+        "ci_invoice_total": {
+          "value": "25000.00",
+          "currency": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Total Invoice Amount: USD 25,000.00"
+        },
+        "lc_amount": {
+          "value": "26250.00",
+          "currency": "USD",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "Currency: USD Amount: USD 26,250.00"
+        },
+        "lc_latest_shipment_date": {
+          "value": "2026-11-15",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "44C: Latest Date of Shipment: 2026-11-15"
+        },
+        "bl_on_board_date": {
+          "value": "2026-11-10",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Shipped on Board Date: 2026-11-10"
+        },
+        "pl_container_number": {
+          "value": "MEDU1000067",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Container Number: MEDU1000067"
+        },
+        "bl_container_number": {
+          "value": "MEDU1000067",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Container Number: MEDU1000067"
+        },
+        "lc_port_of_discharge": {
+          "value": "Chattogram Sea Port, Bangladesh",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "44F: Port of Discharge: Chattogram Sea Port, Bangladesh"
+        },
+        "bl_port_of_discharge": {
+          "value": "Mongla Port, Bangladesh",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Port of Discharge: Mongla Port, Bangladesh"
+        },
+        "bl_place_of_delivery": {
+          "value": "Dhaka, Bangladesh",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Place of Delivery: Dhaka, Bangladesh"
+        },
+        "bl_port_of_loading": {
+          "value": "Busan, South Korea",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Port of Loading: Busan, South Korea"
+        },
+        "pl_cargo_gross_weight": {
+          "value": "21600",
+          "unit": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "pl_cargo_gross_weight_unit": {
+          "value": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "bl_cargo_gross_weight": {
+          "value": "20700",
+          "unit": "KGS",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 20,700.00 KGS"
+        },
+        "bl_cargo_gross_weight_unit": {
+          "value": "KGS",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 20,700.00 KGS"
+        },
+        "ci_cargo_net_weight": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "ci_cargo_net_weight_unit": {
+          "value": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "pl_cargo_net_weight": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "pl_cargo_net_weight_unit": {
+          "value": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "ci_goods_description": {
+          "value": "Linear Low Density Polyethylene (LLDPE) Film Grade",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Description of Goods: Linear Low Density Polyethylene (LLDPE) Film Grade"
+        },
+        "lc_goods_description": {
+          "value": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "45A: Description of Goods: Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010"
+        }
+      },
+      "compliance_checks": {
+        "existing_checks": {
+          "Currency": {
+            "status": "Passed",
+            "evidence": "lc_currency=USD; invoice_currency=USD"
+          },
+          "Quantity (same unit required)": {
+            "status": "Passed",
+            "evidence": "invoice_quantity=20000; packing_quantity=20000"
+          },
+          "Container identifier": {
+            "status": "Passed",
+            "evidence": "packing_container=MEDU1000067; bl_container=MEDU1000067"
+          },
+          "Invoice amount within configured limit": {
+            "status": "Passed",
+            "evidence": "invoice_total=25000.00; lc_amount=26250.00"
+          },
+          "Invoice arithmetic": {
+            "status": "Passed",
+            "evidence": "invoice_total=25000.00; invoice_quantity=20000; unit_price=1.25"
+          },
+          "Shipment deadline": {
+            "status": "Passed",
+            "evidence": "On board: 2026-11-10; latest: 2026-11-15"
+          }
+        },
+        "future_checks": {
+          "port_of_discharge_consistency": {
+            "status": "Review required",
+            "discrepancy_id": "DISC-01",
+            "bl_port": "Mongla Port, Bangladesh",
+            "lc_port": "Chattogram Sea Port, Bangladesh",
+            "notes": "Port of discharge conflict: BL lists Mongla Port while LC Tag 44F specifies Chattogram Sea Port (delivery remains Dhaka)."
+          },
+          "cargo_gross_weight_consistency": {
+            "status": "Review required",
+            "discrepancy_id": "DISC-02",
+            "pl_gross_weight": "21600",
+            "bl_gross_weight": "20700",
+            "unit": "KGS",
+            "notes": "Transposition discrepancy of 900 KG: PL states 21,600 KGS cargo gross weight, whereas BL states 20,700 KGS."
+          },
+          "iso_6346_check_digit": {
+            "status": "Review required",
+            "discrepancy_id": "DISC-03",
+            "container_number": "MEDU1000067",
+            "owner_code": "MED",
+            "category": "U",
+            "serial": "100006",
+            "check_digit": 7,
+            "calculated_check_digit": 0,
+            "notes": "Invalid ISO 6346 container identifier: 7th digit stated as 7, mathematically calculated check digit is 0."
+          },
+          "goods_description_consistency": {
+            "status": "Review required",
+            "discrepancy_id": "DISC-04",
+            "ci_goods": "Linear Low Density Polyethylene (LLDPE) Film Grade",
+            "lc_goods": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+            "notes": "Product conflict: Commercial invoice states LLDPE film grade, while LC Clause 45A requires Prime Virgin HDPE resin Grade HD5010."
+          }
+        }
+      }
+    },
+    "chattogram_corrected": {
+      "packet_id": "chattogram_corrected",
+      "packet_name": "Chattogram Corrected Presentation Packet",
+      "status": "remediated",
+      "description": "Remediated trade presentation resolving all 4 discrepancies via Revised Bill of Lading and Commercial Invoice Rev-1, preserving original shipment identity.",
+      "discrepancies": [],
+      "remediation_notes": [
+        "Port of Discharge on Bill of Lading corrected to Chattogram Sea Port, Bangladesh.",
+        "Cargo Gross Weight on Bill of Lading rectified to 21,600.00 KGS (VGM to 25,400.00 KGS).",
+        "Container number check digit validated and restored to MEDU1000060 across all documents.",
+        "Goods Description on Commercial Invoice Rev-1 corrected to Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010 per LC Clause 45A."
+      ],
+      "extracted_fields": {
+        "lc_currency": {
+          "value": "USD",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "Currency: USD Amount: USD 26,250.00"
+        },
+        "ci_currency": {
+          "value": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Currency: USD"
+        },
+        "ci_quantity": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Invoiced Quantity: 20,000 KGS"
+        },
+        "ci_unit_price": {
+          "value": "1.25",
+          "currency": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Unit Price: USD 1.25 / KG"
+        },
+        "ci_invoice_total": {
+          "value": "25000.00",
+          "currency": "USD",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Total Invoice Amount: USD 25,000.00"
+        },
+        "lc_amount": {
+          "value": "26250.00",
+          "currency": "USD",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "Currency: USD Amount: USD 26,250.00"
+        },
+        "lc_latest_shipment_date": {
+          "value": "2026-11-15",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "44C: Latest Date of Shipment: 2026-11-15"
+        },
+        "bl_on_board_date": {
+          "value": "2026-11-10",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Shipped on Board Date: 2026-11-10"
+        },
+        "pl_container_number": {
+          "value": "MEDU1000060",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Container Number: MEDU1000060"
+        },
+        "bl_container_number": {
+          "value": "MEDU1000060",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Container Number: MEDU1000060"
+        },
+        "lc_port_of_discharge": {
+          "value": "Chattogram Sea Port, Bangladesh",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "44F: Port of Discharge: Chattogram Sea Port, Bangladesh"
+        },
+        "bl_port_of_discharge": {
+          "value": "Chattogram Sea Port, Bangladesh",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Port of Discharge: Chattogram Sea Port, Bangladesh"
+        },
+        "bl_place_of_delivery": {
+          "value": "Dhaka, Bangladesh",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Place of Delivery: Dhaka, Bangladesh"
+        },
+        "bl_port_of_loading": {
+          "value": "Busan, South Korea",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Port of Loading: Busan, South Korea"
+        },
+        "pl_cargo_gross_weight": {
+          "value": "21600",
+          "unit": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "pl_cargo_gross_weight_unit": {
+          "value": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "bl_cargo_gross_weight": {
+          "value": "21600",
+          "unit": "KGS",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "bl_cargo_gross_weight_unit": {
+          "value": "KGS",
+          "document": "bill_of_lading.pdf",
+          "page": 1,
+          "quote": "Cargo Gross Weight: 21,600.00 KGS"
+        },
+        "ci_cargo_net_weight": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "ci_cargo_net_weight_unit": {
+          "value": "KGS",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "pl_cargo_net_weight": {
+          "value": "20000",
+          "unit": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "pl_cargo_net_weight_unit": {
+          "value": "KGS",
+          "document": "packing_list.pdf",
+          "page": 1,
+          "quote": "Cargo Net Weight: 20,000.00 KGS"
+        },
+        "ci_goods_description": {
+          "value": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+          "document": "commercial_invoice.pdf",
+          "page": 1,
+          "quote": "Description of Goods: Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010"
+        },
+        "lc_goods_description": {
+          "value": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+          "document": "letter_of_credit.pdf",
+          "page": 1,
+          "quote": "45A: Description of Goods: Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010"
+        }
+      },
+      "compliance_checks": {
+        "existing_checks": {
+          "Currency": {
+            "status": "Passed",
+            "evidence": "lc_currency=USD; invoice_currency=USD"
+          },
+          "Quantity (same unit required)": {
+            "status": "Passed",
+            "evidence": "invoice_quantity=20000; packing_quantity=20000"
+          },
+          "Container identifier": {
+            "status": "Passed",
+            "evidence": "packing_container=MEDU1000060; bl_container=MEDU1000060"
+          },
+          "Invoice amount within configured limit": {
+            "status": "Passed",
+            "evidence": "invoice_total=25000.00; lc_amount=26250.00"
+          },
+          "Invoice arithmetic": {
+            "status": "Passed",
+            "evidence": "invoice_total=25000.00; invoice_quantity=20000; unit_price=1.25"
+          },
+          "Shipment deadline": {
+            "status": "Passed",
+            "evidence": "On board: 2026-11-10; latest: 2026-11-15"
+          }
+        },
+        "future_checks": {
+          "port_of_discharge_consistency": {
+            "status": "Passed",
+            "bl_port": "Chattogram Sea Port, Bangladesh",
+            "lc_port": "Chattogram Sea Port, Bangladesh",
+            "notes": "Port of discharge resolved to Chattogram Sea Port via Revised Bill of Lading."
+          },
+          "cargo_gross_weight_consistency": {
+            "status": "Passed",
+            "pl_gross_weight": "21600",
+            "bl_gross_weight": "21600",
+            "unit": "KGS",
+            "notes": "Cargo gross weight rectified to 21,600 KGS via Revised Bill of Lading."
+          },
+          "iso_6346_check_digit": {
+            "status": "Passed",
+            "container_number": "MEDU1000060",
+            "owner_code": "MED",
+            "category": "U",
+            "serial": "100006",
+            "check_digit": 0,
+            "calculated_check_digit": 0,
+            "notes": "Validated ISO 6346 container identifier MEDU1000060 with valid check digit 0."
+          },
+          "goods_description_consistency": {
+            "status": "Passed",
+            "ci_goods": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+            "lc_goods": "Prime Virgin High Density Polyethylene (HDPE) Resin Grade HD5010",
+            "notes": "Goods description corrected to Prime Virgin HDPE Resin Grade HD5010 via Commercial Invoice Rev-1."
+          }
+        }
+      }
+    }
+  }
+}
