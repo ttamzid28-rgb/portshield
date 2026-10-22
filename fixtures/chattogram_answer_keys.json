@@ -54,12 +54,22 @@
       "demonstration_discrepancy_delta_kg": 900.0
     },
     "lc_financial_tolerance_policy": {
-      "nominal_face_amount_usd": 25000.00,
-      "tag_39a_tolerance_pct": 5.0,
-      "drawing_ceiling_usd": 26250.00,
-      "rule": "invoice_total <= lc_amount"
+      "commercial_invoice_total_usd": 25000.00,
+      "lc_face_amount_usd": 26250.00,
+      "stated_positive_tolerance_pct": 5.0,
+      "tag_39a_positive_tolerance_pct": 5.0,
+      "max_permissible_draw_usd": 27562.50,
+      "upper_limit_usd": 27562.50,
+      "current_engine_comparison_limit_usd": 26250.00,
+      "rule": "invoice_total <= lc_amount",
+      "technical_note": "The current checks.py engine evaluates invoice_total against lc_amount as an upper limit using the face amount (USD 26,250.00) and does not yet evaluate SWIFT Tag 39A tolerance. The arithmetic check verifies invoice_total <= lc_amount ($25,000 <= $26,250) and is not a complete bank-compliance credit determination."
     },
-    "field_lifecycle_note": "Reviewer confirmation preserves original model extraction state (status) while recording review_status ('unreviewed', 'confirmed', 'edited', 'rejected') separately."
+    "review_status_enum": [
+      "pending",
+      "confirmed",
+      "unresolved"
+    ],
+    "field_lifecycle_note": "Reviewer confirmation preserves original model extraction state (status: 'missing', 'extracted', 'unreadable', 'rejected', 'conflicting', 'manual') while recording review_status ('pending', 'confirmed', 'unresolved') separately. When a human reviewer edits a value, it transitions to 'confirmed' upon reviewer submission."
   },
   "packets": {
     "chattogram_clean": {

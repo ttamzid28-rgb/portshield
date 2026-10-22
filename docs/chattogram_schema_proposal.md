@@ -118,15 +118,15 @@ The PortShield field lifecycle strictly decouples **system extraction quality** 
 ```
 [ MODEL EXTRACTION PIPELINE ]                    [ HUMAN GOVERNANCE WORKFLOW ]
      │                                                        │
-     ├── Extracted & Validated ────> extraction_status:       │
+     ├── Extracted & Validated ────> status (extraction):     │
      │                               "extracted"              ▼
-     ├── Parsing / Syntax Error ───> extraction_status:  review_status:
-     │                               "rejected"          "unreviewed" (default)
-     ├── Text Unreadable on Page ──> extraction_status:       │
-     │                               "unreadable"             ├── Verified by User ──> "confirmed"
-     ├── Multiple Conflicting ─────> extraction_status:       ├── Adjusted by User ──> "edited"
-     │                               "conflicting"            └── Overruled ─────────> "rejected"
-     └── Omitted by Model ─────────> extraction_status:
+     ├── Parsing / Syntax Error ───> status (extraction):  review_status:
+     │                               "rejected"            "pending" (default)
+     ├── Text Unreadable on Page ──> status (extraction):     │
+     │                               "unreadable"             ├── Human Submits / Confirms ──> "confirmed"
+     ├── Multiple Conflicting ─────> status (extraction):     │   (Edits transition to
+     │                               "conflicting"            │    confirmed upon submission)
+     └── Omitted by Model ─────────> status (extraction):     └── Unaddressed / Missing ─────> "unresolved"
                                      "missing"
 ```
 
@@ -134,14 +134,15 @@ The PortShield field lifecycle strictly decouples **system extraction quality** 
 
 | State Category | Field Property | Possible Values | Semantics |
 | :--- | :--- | :--- | :--- |
-| **System Extraction State** | `status` (or `extraction_status`) | `extracted`, `missing`, `unreadable`, `rejected`, `conflicting` | Immutable record of automated model extraction performance and quote verification. |
-| **Human Governance State** | `review_status` | `unreviewed` (or `pending`), `confirmed`, `edited`, `rejected` | Tracks human review progress and auditor actions. |
+| **System Extraction State** | `status` (or `extraction_status`) | `extracted`, `missing`, `unreadable`, `rejected`, `conflicting`, `manual` | Immutable record of automated model extraction performance and quote verification. |
+| **Human Governance State** | `review_status` | `pending`, `confirmed`, `unresolved` | Tracks human review progress and auditor actions. Initialized as `pending`. When a human reviewer confirms or edits a value, it transitions directly to `confirmed` upon reviewer submission. Unresolved or empty values transition to `unresolved`. |
 | **Audited Value** | `reviewed_value` | String (`""` if unconfirmed) | Value explicitly confirmed or modified by human auditor. |
 
 ### 4.2 State Machine Invariants
-1. **Confirmation Immutability**: When an auditor confirms a field, `review_status` transitions from `"pending"` to `"confirmed"`. **The underlying `extraction_status` is NOT overwritten or mutated** (e.g. an extraction that was `"rejected"` due to a minor syntax error retains `status: "rejected"` alongside `review_status: "confirmed"`).
-2. **Audit Trail Preservation**: All original model candidates, cited quotes, document indexes, and page numbers remain preserved in `evidence['_field_states'][field]['candidates']`.
-3. **Engine Usable Values**: Functions in [`checks.py:audit()`](file:///D:/Projects/portshield-1/checks.py#L4-L28) consume values through [`field_states.py:usable_values()`](file:///D:/Projects/portshield-1/field_states.py#L57-L61), which enforces that values are only usable when `review_status == 'confirmed'`.
+1. **Runtime Review State Enum**: The review state enum strictly preserves the runtime contract: `["pending", "confirmed", "unresolved"]`. There is no `edited` state; when a human reviewer edits a value, it transitions to `"confirmed"` upon reviewer submission.
+2. **Confirmation Immutability**: When an auditor confirms or edits a field, `review_status` transitions from `"pending"` to `"confirmed"`. **The underlying extraction state (`status`) is NOT overwritten or mutated** (e.g., an extraction that was `"rejected"` due to a syntax error retains `status: "rejected"` alongside `review_status: "confirmed"`).
+3. **Audit Trail Preservation**: All original model candidates, cited quotes, document indexes, and page numbers remain preserved in `evidence['_field_states'][field]['candidates']`.
+4. **Engine Usable Values**: Functions in [`checks.py:audit()`](file:///D:/Projects/portshield-1/checks.py#L4-L28) consume values through [`field_states.py:usable_values()`](file:///D:/Projects/portshield-1/field_states.py#L57-L61), which enforces that values are only usable when `review_status == 'confirmed'`.
 
 ---
 
@@ -163,17 +164,23 @@ $$\begin{aligned}
 \end{aligned}$$
 
 ### 5.3 Financial Headroom vs. L/C Tolerance Disambiguation
-Under SWIFT MT700 standards, documentary credits must not confuse **Face Amount (Tag 32B)** with **Tolerance Ceiling (Tag 39A/39B)**:
+Under SWIFT MT700 standards, documentary credits declare the credit terms across distinct fields:
 
-1. **Tag 32B (Face Amount)**: Declares the nominal face credit value.
-2. **Tag 39A (Percentage Tolerance)**: Declares permitted drawing variation (e.g., `5/5` denotes $\pm 5\%$).
-3. **Disambiguation Contract**:
-   - An explicit face amount of `USD 26,250.00` (with 0% tolerance) is **not** identical to a nominal face amount of `USD 25,000.00` subject to $\pm 5\%$ tolerance, even though both permit a maximum drawing of `USD 26,250.00`.
-   - **Audit Engine Evaluation**: In [`checks.py`](file:///D:/Projects/portshield-1/checks.py#L17-L22), the rule `Invoice amount within configured limit` compares `Decimal(invoice_total) <= Decimal(lc_amount)`.
-   - In our demonstration baseline, `lc_amount` is declared as `USD 26,250.00` (the credit ceiling), and `ci_invoice_total` is `USD 25,000.00`. This ensures:
+1. **Commercial Invoice Total**: USD 25,000.00
+2. **L/C Face Amount (Tag 32B)**: USD 26,250.00
+3. **Stated Positive Tolerance (Tag 39A)**: 5% (`5/5` denotes $+5\% / -5\%$)
+4. **Maximum Permissible Draw (Face Amount x 1.05)**: USD 27,562.50
+5. **Current Engine Comparison Limit**: USD 26,250.00
+
+> [!NOTE]
+> **Technical Note on Engine Limit & Bank Compliance Determination**:  
+> The current checks.py engine evaluates invoice_total against lc_amount as an upper limit using the face amount (USD 26,250.00) and does not yet evaluate SWIFT Tag 39A tolerance. The arithmetic check verifies invoice_total <= lc_amount ($25,000 <= $26,250) and is not a complete bank-compliance credit determination.
+
+6. **Audit Engine Arithmetic Check**:
+   - In [`checks.py`](file:///D:/Projects/portshield-1/checks.py#L17-L22), the baseline rule `Invoice amount within configured limit` compares `Decimal(invoice_total) <= Decimal(lc_amount)`:
      $$25,000.00 \le 26,250.00 \implies \mathbf{Passed}$$
    - When tolerance is explicitly extracted, future audit rules evaluate:
-     $$\text{ci\_invoice\_total} \le \text{lc\_amount} \times \left(1 + \frac{\text{tolerance\_pct}}{100}\right)$$
+     $$\text{ci\_invoice\_total} \le \text{lc\_amount} \times \left(1 + \frac{\text{tolerance\_pct}}{100}\right) = 26,250.00 \times 1.05 = 27,562.50$$
 
 ---
 

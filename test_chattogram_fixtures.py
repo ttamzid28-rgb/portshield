@@ -266,6 +266,124 @@ class TestChattogramFixtures(unittest.TestCase):
         self.assertIn("Bengal Polymer Industries", ci_text)
         self.assertIn("Busan Petrochemical", ci_text)
 
+    def test_review_states_match_runtime_contract(self):
+        """Verify all declared review statuses in fixtures/chattogram_answer_keys.json strictly belong to {'pending', 'confirmed', 'unresolved'}."""
+        with open(ANSWER_KEY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        valid_review_statuses = {"pending", "confirmed", "unresolved"}
+        forbidden_review_statuses = {"unreviewed", "edited", "rejected"}
+
+        # 1. Verify declared review status enum in metadata
+        metadata = data.get("metadata", {})
+        declared_enum = metadata.get("review_status_enum")
+        self.assertIsNotNone(declared_enum, "Answer key metadata must declare review_status_enum")
+        self.assertEqual(
+            set(declared_enum),
+            valid_review_statuses,
+            f"Declared review enum {declared_enum} must match {valid_review_statuses}",
+        )
+
+        # 2. Check field lifecycle note does not declare forbidden review states under review_status
+        lifecycle_note = metadata.get("field_lifecycle_note", "")
+        if "review_status" in lifecycle_note:
+            review_clause = lifecycle_note.split("review_status", 1)[1]
+            for forbidden in forbidden_review_statuses:
+                self.assertNotIn(
+                    f"'{forbidden}'",
+                    review_clause,
+                    f"Field lifecycle note must not declare forbidden review state: '{forbidden}'",
+                )
+
+        # 3. Collect and verify all declared review status attributes across the entire JSON
+        declared_statuses = []
+
+        def find_review_statuses(node):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k in {"review_status", "review_status_enum"}:
+                        if isinstance(v, list):
+                            declared_statuses.extend(v)
+                        elif isinstance(v, str):
+                            declared_statuses.append(v)
+                    find_review_statuses(v)
+            elif isinstance(node, list):
+                for item in node:
+                    find_review_statuses(item)
+
+        find_review_statuses(data)
+        self.assertGreater(len(declared_statuses), 0, "At least one review status must be declared in answer keys")
+        for status in declared_statuses:
+            self.assertIn(
+                status,
+                valid_review_statuses,
+                f"Declared review status '{status}' violates runtime contract enum {valid_review_statuses}",
+            )
+            self.assertNotIn(
+                status,
+                forbidden_review_statuses,
+                f"Declared review status '{status}' matches forbidden review state",
+            )
+
+    def test_financial_metadata_alignment_with_pdf_tags(self):
+        """Assert alignment between answer-key financial metadata and letter_of_credit.pdf text layer tags."""
+        with open(ANSWER_KEY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # 1. Assert L/C tolerance policy metadata in metadata section
+        metadata = data.get("metadata", {})
+        policy = metadata.get("lc_financial_tolerance_policy", {})
+        self.assertIsNotNone(policy, "Missing lc_financial_tolerance_policy in metadata")
+
+        # Commercial invoice total: 25000.00
+        self.assertEqual(float(policy.get("commercial_invoice_total_usd")), 25000.00)
+
+        # L/C face amount: 26250.00
+        self.assertEqual(float(policy.get("lc_face_amount_usd")), 26250.00)
+
+        # Positive tolerance must be recorded as 5.0%
+        pos_tol = policy.get("stated_positive_tolerance_pct", policy.get("tag_39a_positive_tolerance_pct"))
+        self.assertEqual(float(pos_tol), 5.0, "Positive tolerance must be recorded as 5.0%")
+
+        # Upper limit / max permissible draw must be recorded as 27562.50
+        upper_limit = policy.get("max_permissible_draw_usd", policy.get("upper_limit_usd"))
+        self.assertEqual(float(upper_limit), 27562.50, "Upper drawing limit must be 27,562.50 USD")
+
+        # Current engine comparison limit: 26250.00
+        self.assertEqual(float(policy.get("current_engine_comparison_limit_usd")), 26250.00)
+
+        # Technical note must be present with required wording
+        tech_note = policy.get("technical_note", "")
+        self.assertIn("USD 26,250.00", tech_note)
+        self.assertIn("$25,000 <= $26,250", tech_note)
+
+        # 2. Check each packet's financial values and Tag 32B verbatim matching
+        for packet_id in PACKET_NAMES:
+            packet_fields = data["packets"][packet_id]["extracted_fields"]
+
+            # lc_amount.value == "26250.00"
+            self.assertIn("lc_amount", packet_fields)
+            lc_field = packet_fields["lc_amount"]
+            self.assertEqual(lc_field["value"], "26250.00", f"{packet_id}: lc_amount.value must be '26250.00'")
+
+            # ci_invoice_total.value == "25000.00"
+            self.assertIn("ci_invoice_total", packet_fields)
+            ci_field = packet_fields["ci_invoice_total"]
+            self.assertEqual(ci_field["value"], "25000.00", f"{packet_id}: ci_invoice_total.value must be '25000.00'")
+
+            # Tag 32B quote in L/C answer key matches verbatim text layer of letter_of_credit.pdf ("USD 26,250.00")
+            lc_quote = lc_field["quote"]
+            self.assertIn("USD 26,250.00", lc_quote, f"{packet_id}: lc_amount quote must contain 'USD 26,250.00'")
+
+            pdf_path = PACKETS_DIR / packet_id / "letter_of_credit.pdf"
+            doc = pymupdf.open(str(pdf_path))
+            page1_text = doc[0].get_text()
+            doc.close()
+
+            self.assertIn("USD 26,250.00", page1_text, f"{packet_id}: letter_of_credit.pdf text layer must contain 'USD 26,250.00'")
+            self.assertIn(lc_quote, page1_text, f"{packet_id}: Tag 32B quote must match verbatim in letter_of_credit.pdf text layer")
+
 
 if __name__ == "__main__":
     unittest.main()
+
