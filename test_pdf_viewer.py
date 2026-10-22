@@ -1,6 +1,8 @@
 import copy
+import json
 import pickle
 import unittest
+from unittest.mock import MagicMock, patch
 import pymupdf
 
 from pdf_viewer import (
@@ -8,10 +10,13 @@ from pdf_viewer import (
     get_page_count,
     extract_page_text,
     locate_quote_on_page,
+    find_quote_rects,
     normalize_quote,
     normalize_ws,
     normalize_page_text,
     clear_cache,
+    bind_packet,
+    packet_provenance_manifest,
     _load_documents,
     render_pdf_viewer,
     _CACHE_MAX,
@@ -351,5 +356,297 @@ class PdfViewerUnitTests(unittest.TestCase):
             self.assertTrue(len(png_hl) > 100)
 
 
+    def test_exact_numeric_boundary_mismatch_18000_not_matching_180000(self):
+        """Enforce strict token and numeric boundary checks: 18000 must NOT match 180000."""
+        pdf_bytes = make_text_pdf("Commercial Invoice\nInvoice total 180000\nChattogram Port")
+        doc = pymupdf.open(stream=pdf_bytes, filetype='pdf')
+        page = doc[0]
+
+        # 1. Searching for "18000" alone inside "180000" must NOT match (full or partial)
+        res_single = locate_quote_on_page(pdf_bytes, 0, "18000")
+        self.assertFalse(res_single['found'])
+        self.assertFalse(res_single['partial'])
+        self.assertEqual(res_single['label'], "Quote not located visually")
+        self.assertEqual(find_quote_rects(page, "18000"), [])
+
+        # Render must not highlight "18000" inside "180000"
+        png, r_err = render_page(pdf_bytes, 0, highlight_quote="18000")
+        self.assertEqual(r_err, "")
+        self.assertTrue(len(png) > 100)
+
+        # 2. Searching for "Invoice total 18000" inside "Invoice total 180000":
+        # Full match MUST be False; partial match may be flagged because words match
+        res_full = locate_quote_on_page(pdf_bytes, 0, "Invoice total 18000")
+        self.assertFalse(res_full['found'])
+        self.assertTrue(res_full['partial'])
+        self.assertEqual(res_full['label'], "Partial match only — visual verification required")
+        self.assertEqual(find_quote_rects(page, "Invoice total 18000"), [])
+
+        # 3. Exact matching number "180000" MUST match
+        res_true_num = locate_quote_on_page(pdf_bytes, 0, "180000")
+        self.assertTrue(res_true_num['found'])
+        self.assertFalse(res_true_num['partial'])
+        self.assertEqual(res_true_num['label'], "Quote located on page")
+        self.assertGreater(len(find_quote_rects(page, "180000")), 0)
+
+        # 4. Exact full phrase "Invoice total 180000" MUST match
+        res_true_phrase = locate_quote_on_page(pdf_bytes, 0, "Invoice total 180000")
+        self.assertTrue(res_true_phrase['found'])
+        self.assertFalse(res_true_phrase['partial'])
+        self.assertEqual(res_true_phrase['label'], "Quote located on page")
+        self.assertGreater(len(find_quote_rects(page, "Invoice total 180000")), 0)
+        doc.close()
+
+    def test_packet_binding_provenance_and_duplicate_preservation(self):
+        """Bind and retain exact extracted packet, sequence order, SHA-256 hashes, and preserve identical documents without collapse."""
+        pdf_a = make_text_pdf("Document Version A")
+        pdf_b = make_text_pdf("Document Version B")
+        pdf_a_clone = pdf_a  # Identical bytes to pdf_a
+
+        # 3 documents: two have identical filenames and identical bytes
+        raw_packet = [
+            ('invoice.pdf', pdf_a),
+            ('invoice.pdf', pdf_b),
+            ('invoice.pdf', pdf_a_clone),
+        ]
+
+        bound = bind_packet(raw_packet)
+        self.assertEqual(len(bound), 3)
+
+        # Verify sequence order (1-indexed matching candidate citations)
+        self.assertEqual([d['index'] for d in bound], [1, 2, 3])
+
+        # Verify document names preserved without overwrite
+        self.assertEqual([d['name'] for d in bound], ['invoice.pdf', 'invoice.pdf', 'invoice.pdf'])
+
+        # Verify SHA-256 hashes
+        self.assertEqual(bound[0]['sha256'], bound[2]['sha256'])
+        self.assertNotEqual(bound[0]['sha256'], bound[1]['sha256'])
+        self.assertEqual(len(bound[0]['sha256']), 64)
+
+        # Verify JSON-serializable provenance manifest
+        manifest = packet_provenance_manifest(bound)
+        self.assertEqual(len(manifest), 3)
+        self.assertEqual(manifest[0]['index'], 1)
+        self.assertEqual(manifest[0]['name'], 'invoice.pdf')
+        self.assertIn('sha256', manifest[0])
+        self.assertNotIn('bytes', manifest[0])
+        dumped = json.dumps(manifest)
+        self.assertIn('invoice.pdf', dumped)
+
+    def test_missing_packet_source_unavailable_fallback(self):
+        """Gracefully render explicit 'Source unavailable' placeholder when packet is absent."""
+        mock_st = MagicMock()
+        mock_st.session_state = {}
+
+        with patch('pdf_viewer.st', mock_st):
+            # 1. Packet is None
+            render_pdf_viewer(bound_packet=None, evidence={})
+            mock_st.warning.assert_called()
+            warning_msg = mock_st.warning.call_args[0][0]
+            self.assertIn("Source unavailable", warning_msg)
+
+            # 2. Packet is empty list
+            mock_st.reset_mock()
+            render_pdf_viewer(bound_packet=[], evidence={})
+            mock_st.warning.assert_called()
+            warning_msg = mock_st.warning.call_args[0][0]
+            self.assertIn("Source unavailable", warning_msg)
+
+    def test_candidate_citing_absent_document_renders_source_unavailable(self):
+        """When a candidate cites a document absent from the bound packet, display 'Source unavailable' placeholder."""
+        doc1 = make_text_pdf("Invoice Doc 1")
+        bound = bind_packet([('invoice.pdf', doc1)])
+
+        # Evidence cites document: 2 (which does not exist in a 1-document packet)
+        evidence = {
+            '_field_states': {
+                'invoice_total': {
+                    'status': 'extracted',
+                    'reason': 'Source review required',
+                    'candidates': [
+                        {
+                            'value': '25000',
+                            'quote': 'Invoice Doc 1',
+                            'document': 2,
+                            'page': 1,
+                            'status': 'extracted',
+                        }
+                    ]
+                }
+            }
+        }
+
+        mock_st = MagicMock()
+        mock_st.session_state = {
+            'pdfv_doc_index': 0,
+            'pdfv_page_number': 1,
+            'pdfv_selected_field': 'invoice_total',
+            'pdfv_selected_candidate': 0,
+        }
+        mock_st.columns.return_value = (MagicMock(), MagicMock())
+        mock_st.selectbox.side_effect = lambda label, options, index=0, **kw: options[index] if options else 0
+        mock_st.number_input.side_effect = lambda label, min_value=1, max_value=1, value=1, **kw: value
+        mock_st.radio.side_effect = lambda label, options, index=0, **kw: options[index] if options else 0
+        mock_st.button.return_value = False
+
+        with patch('pdf_viewer.st', mock_st):
+            render_pdf_viewer(bound, evidence)
+            mock_st.warning.assert_called()
+            warning_text = mock_st.warning.call_args[0][0]
+            self.assertIn("Source unavailable", warning_text)
+            self.assertIn("absent from the bound packet", warning_text)
+
+    def test_cross_document_jump_navigation_synchronization(self):
+        """Cross-document jumps synchronously update both document and page selectboxes/inputs via pending navigation."""
+        doc1 = make_text_pdf("Commercial Invoice Content")
+        doc2 = make_text_pdf("Letter of Credit Content")
+        bound = bind_packet([('invoice.pdf', doc1), ('lc.pdf', doc2)])
+
+        evidence = {
+            '_field_states': {
+                'lc_amount': {
+                    'status': 'extracted',
+                    'reason': '',
+                    'candidates': [
+                        {
+                            'value': '25000',
+                            'quote': 'Letter of Credit Content',
+                            'document': 2,
+                            'page': 1,
+                            'status': 'extracted',
+                        }
+                    ]
+                }
+            }
+        }
+
+        session_state = {
+            'pdfv_doc_index': 0,
+            'pdfv_page_number': 1,
+            'pdfv_nav_version': 0,
+            'pdfv_selected_field': 'lc_amount',
+            'pdfv_selected_candidate': 0,
+        }
+
+        mock_st = MagicMock()
+        mock_st.session_state = session_state
+        mock_st.columns.return_value = (MagicMock(), MagicMock())
+        mock_st.selectbox.side_effect = lambda label, options, index=0, **kw: options[index] if options else 0
+        mock_st.number_input.side_effect = lambda label, min_value=1, max_value=1, value=1, **kw: value
+        mock_st.radio.side_effect = lambda label, options, index=0, **kw: options[index] if options else 0
+        mock_st.button.side_effect = lambda label, **kw: 'Jump' in label
+
+        with patch('pdf_viewer.st', mock_st):
+            render_pdf_viewer(bound, evidence)
+
+        # Verify state immediately updated on jump click
+        self.assertEqual(session_state['pdfv_doc_index'], 1)
+        self.assertEqual(session_state['pdfv_nav_version'], 1)
+        self.assertEqual(session_state['pdfv_pending_nav'], {'doc_index': 1, 'page_number': 1})
+        self.assertTrue(mock_st.rerun.called)
+
+        # Simulate subsequent rerun cycle
+        mock_st.reset_mock()
+        mock_st.button.side_effect = lambda label, **kw: False
+        with patch('pdf_viewer.st', mock_st):
+            render_pdf_viewer(bound, evidence)
+
+        # Verify pending navigation applied and widgets keyed with new nav_version
+        self.assertEqual(session_state['pdfv_doc_index'], 1)
+        self.assertEqual(session_state['pdfv_page_number'], 1)
+        found_doc_selector = False
+        for call_item in mock_st.selectbox.call_args_list:
+            if call_item.kwargs.get('key') == 'pdfv_doc_selector_1':
+                found_doc_selector = True
+                self.assertEqual(call_item.kwargs.get('index'), 1)
+        self.assertTrue(found_doc_selector)
+
+    def test_viewer_immutability_preserves_unconfirmed_reviewer_edits(self):
+        """Interaction test: changing documents, jumping to citations, or paging in viewer never overwrites unconfirmed reviewer edits."""
+        doc1 = make_text_pdf("Invoice Page 1\nInvoice total USD 25,000")
+        doc2 = make_text_pdf("LC Page 1\nLC Amount USD 25,000")
+        bound = bind_packet([('invoice.pdf', doc1), ('lc.pdf', doc2)])
+
+        unconfirmed_fields = {
+            'invoice_total': '29000_unconfirmed_reviewer_edit',
+            'latest_shipment_date': '2026-12-31_draft',
+            'lc_amount': '25000',
+        }
+        original_fields_snapshot = copy.deepcopy(unconfirmed_fields)
+
+        evidence = {
+            'invoice_total': 'Original AI text',
+            '_field_states': {
+                'invoice_total': {
+                    'status': 'conflicting',
+                    'reason': 'Reviewer confirmation required',
+                    'review_status': 'pending',
+                    'candidates': [
+                        {
+                            'value': '25000',
+                            'quote': 'LC Amount USD 25,000',
+                            'document': 2,
+                            'page': 1,
+                            'status': 'extracted',
+                        }
+                    ]
+                }
+            }
+        }
+        original_evidence_pickle = pickle.dumps(evidence)
+
+        session_state = {
+            'fields': unconfirmed_fields,
+            'evidence': evidence,
+            'reviewer_notes': 'Checked container seals; waiting for updated invoice',
+            'user_dirty_flag': True,
+            'pdfv_doc_index': 0,
+            'pdfv_page_number': 1,
+            'pdfv_nav_version': 0,
+            'pdfv_selected_field': 'invoice_total',
+            'pdfv_selected_candidate': 0,
+        }
+
+        mock_st = MagicMock()
+        mock_st.session_state = session_state
+        mock_st.columns.return_value = (MagicMock(), MagicMock())
+        mock_st.selectbox.side_effect = lambda label, options, index=0, **kw: options[index] if options else 0
+        mock_st.number_input.side_effect = lambda label, min_value=1, max_value=1, value=1, **kw: value
+        mock_st.radio.side_effect = lambda label, options, index=0, **kw: options[index] if options else 0
+        mock_st.button.return_value = False
+
+        with patch('pdf_viewer.st', mock_st):
+            # 1. Initial render (Doc 1, Page 1)
+            render_pdf_viewer(bound, evidence)
+
+            # 2. Simulate manual document switch to Doc 2
+            session_state['pdfv_doc_index'] = 1
+            render_pdf_viewer(bound, evidence)
+
+            # 3. Simulate paging
+            session_state['pdfv_page_number'] = 1
+            render_pdf_viewer(bound, evidence)
+
+            # 4. Simulate jump action
+            mock_st.button.side_effect = lambda label, **kw: 'Jump' in label
+            render_pdf_viewer(bound, evidence)
+
+            # 5. Rerun following jump
+            mock_st.button.side_effect = lambda label, **kw: False
+            render_pdf_viewer(bound, evidence)
+
+        # Assert unconfirmed reviewer fields in st.session_state are completely untouched
+        self.assertEqual(session_state['fields'], original_fields_snapshot)
+        self.assertEqual(session_state['fields']['invoice_total'], '29000_unconfirmed_reviewer_edit')
+        self.assertEqual(session_state['reviewer_notes'], 'Checked container seals; waiting for updated invoice')
+        self.assertTrue(session_state['user_dirty_flag'])
+
+        # Assert evidence dictionary and review_status are byte-for-byte unmodified
+        self.assertEqual(pickle.dumps(evidence), original_evidence_pickle)
+        self.assertEqual(evidence['_field_states']['invoice_total']['review_status'], 'pending')
+
+
 if __name__ == '__main__':
     unittest.main()
+

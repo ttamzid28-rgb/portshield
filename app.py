@@ -7,7 +7,7 @@ from pypdf import PdfReader
 from checks import audit
 from field_states import review_fields
 from ai_runtime import run_job, DEFAULT_MODELS, DEADLINE_SECONDS
-from pdf_viewer import render_pdf_viewer
+from pdf_viewer import render_pdf_viewer, bind_packet, packet_provenance_manifest
 
 st.set_page_config(page_title='PortShield AI | Document Readiness',page_icon='🛡️',layout='wide')
 st.markdown("""<style>
@@ -32,6 +32,7 @@ with st.sidebar:
         if scenario=='Unreadable field':sample['invoice_total']=''
         st.session_state.previous=st.session_state.pop('results',st.session_state.get('previous',[]))
         st.session_state.ai_pending=False;st.session_state.fields=sample;st.session_state.evidence={k:f'Fictional sample field: {k} = {v}' for k,v in sample.items()}
+        st.session_state.bound_packet=None
     st.download_button('Download sample PDFs',(Path(__file__).parent / 'sample_documents.zip').read_bytes(),'portshield-sample-documents.zip','application/zip')
     st.caption('Upload the sample PDFs below to exercise actual text extraction. Other layouts may need manual entry.')
 overview,upload,review,actions,about=st.tabs(['Shipment overview','Document intake','Review & evidence','Corrections & report','Scope & roadmap'])
@@ -125,6 +126,9 @@ with upload:
                         st.session_state.benchmark_run=None
                         raise ValueError(outcome['diagnostic']['message'])
                     values,source=outcome['data']
+                    bound=bind_packet(packet)
+                    st.session_state.bound_packet=bound
+                    source['_packet_provenance']=packet_provenance_manifest(bound)
                     st.session_state.benchmark_run={'case_id':benchmark_case['case_id'],'provider':selected,'elapsed_seconds':round(time.perf_counter()-started,2),'raw_fields':dict(values),'source_evidence':dict(source)} if benchmark_case else None
                 st.session_state.previous=st.session_state.pop('results',st.session_state.get('previous',[]))
                 st.session_state.fields=values;st.session_state.evidence=source;st.session_state.ai_pending=True
@@ -154,6 +158,8 @@ with upload:
     if st.button('Extract uploaded text',disabled=use_demo):
         extracted={}; evidence={}; conflicts=set(); unreadable=False; labelled_candidates={k:[] for k in fields}
         if not files:st.warning('Upload at least one PDF.')
+        packet=[(f.name,f.getvalue()) for f in files or []]
+        bound=bind_packet(packet)
         for f in files or []:
             try:
                 reader=PdfReader(io.BytesIO(f.getvalue()))
@@ -174,6 +180,8 @@ with upload:
                 st.warning(f'Could not read {f.name}. Please use an unencrypted text PDF.')
         if files:
             evidence['_field_states']={k:{'status':'conflicting' if k in conflicts else 'extracted' if extracted.get(k) else 'unreadable' if unreadable else 'missing', 'reason':'Labelled extraction; unreadable means incomplete packet text coverage, not proven field location.', 'candidates':labelled_candidates[k], 'review_status':'pending'} for k in fields}
+            evidence['_packet_provenance']=packet_provenance_manifest(bound)
+            st.session_state.bound_packet=bound
             st.session_state.previous=st.session_state.pop('results',st.session_state.get('previous',[]))
             st.session_state.ai_pending=True;st.session_state.fields={k:extracted.get(k,'') for k in fields};st.session_state.evidence=evidence
             st.rerun()
@@ -188,7 +196,7 @@ with review:
     with st.expander('Source extraction evidence',expanded=st.session_state.get('ai_pending',False)):
         for key,source in st.session_state.evidence.items():
             st.json(source) if isinstance(source,dict) else st.text(key+' — '+source)
-    render_pdf_viewer(files, st.session_state.evidence)
+    render_pdf_viewer(st.session_state.get('bound_packet'), st.session_state.evidence)
     with st.form('review_form'):
         vals={};cols=st.columns(3)
         for i,k in enumerate(fields):
