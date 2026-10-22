@@ -203,7 +203,8 @@ def extract_page_text(pdf_bytes: bytes, page_index: int) -> tuple[str, str]:
 def build_token_boundary_pattern(quote: str) -> str:
     """Build a regex pattern enforcing discrete word and numeric boundaries for all tokens.
 
-    Ensures discrete token matching so numbers like '18000' do NOT match inside '180000'.
+    Ensures discrete token matching so numbers like '18000' do NOT match inside '180000',
+    '18000.50', or '18' inside '18,000'.
     """
     norm_q = normalize_quote(quote)
     tokens = [t for t in re.split(r'\s+', norm_q) if t]
@@ -212,8 +213,20 @@ def build_token_boundary_pattern(quote: str) -> str:
     pattern_parts = []
     for t in tokens:
         esc = re.escape(t)
-        prefix = r'\b' if re.match(r'^\w', t) else r'(?<!\w)'
-        suffix = r'\b' if re.search(r'\w$', t) else r'(?!\w)'
+        if re.match(r'^\d', t):
+            prefix = r'(?<![\w.,])'
+        elif re.match(r'^\w', t):
+            prefix = r'\b'
+        else:
+            prefix = r'(?<!\w)'
+
+        if re.search(r'\d$', t):
+            suffix = r'(?![\w.,])'
+        elif re.search(r'\w$', t):
+            suffix = r'\b'
+        else:
+            suffix = r'(?!\w)'
+
         pattern_parts.append(f"{prefix}{esc}{suffix}")
     return r'\s+'.join(pattern_parts)
 
@@ -270,8 +283,8 @@ def find_quote_rects(page, quote: str) -> list:
     def _is_word_valid(word_text: str) -> bool:
         for t in tokens:
             if t.lower() in word_text.lower():
-                prefix = r'\b' if re.match(r'^\w', t) else r'(?<!\w)'
-                suffix = r'\b' if re.search(r'\w$', t) else r'(?!\w)'
+                prefix = r'(?<![\w.,])' if re.match(r'^\d', t) else (r'\b' if re.match(r'^\w', t) else r'(?<!\w)')
+                suffix = r'(?![\w.,])' if re.search(r'\d$', t) else (r'\b' if re.search(r'\w$', t) else r'(?!\w)')
                 t_pat = f"{prefix}{re.escape(t)}{suffix}"
                 if not re.search(t_pat, word_text, re.IGNORECASE):
                     return False
@@ -356,8 +369,8 @@ def locate_quote_on_page(pdf_bytes: bytes, page_index: int, quote: str) -> dict:
 
         matched_tokens = []
         for t in tokens:
-            prefix = r'\b' if re.match(r'^\w', t) else r'(?<!\w)'
-            suffix = r'\b' if re.search(r'\w$', t) else r'(?!\w)'
+            prefix = r'(?<![\w.,])' if re.match(r'^\d', t) else (r'\b' if re.match(r'^\w', t) else r'(?<!\w)')
+            suffix = r'(?![\w.,])' if re.search(r'\d$', t) else (r'\b' if re.search(r'\w$', t) else r'(?!\w)')
             t_pat = f"{prefix}{re.escape(t)}{suffix}"
             if re.search(t_pat, norm_page, re.IGNORECASE):
                 matched_tokens.append(t)
@@ -478,6 +491,23 @@ def _load_documents(uploaded_files) -> dict[str, bytes]:
             except Exception:
                 pass
     return docs
+
+
+def render_source_evidence(evidence: dict) -> None:
+    """Safely render source extraction evidence in Streamlit.
+
+    Inspects value types: renders dictionaries and lists (such as _packet_provenance)
+    safely with st.json(), and string values with st.text() or st.write().
+    Avoids TypeError caused by concatenating strings with lists or dicts.
+    """
+    if not _ST_AVAILABLE or not isinstance(evidence, dict):
+        return
+    for key, source in evidence.items():
+        if isinstance(source, (dict, list)):
+            st.write(f"**{key}**:")
+            st.json(source)
+        else:
+            st.text(f"{key} — {source}")
 
 
 def render_pdf_viewer(

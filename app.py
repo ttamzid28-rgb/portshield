@@ -7,7 +7,7 @@ from pypdf import PdfReader
 from checks import audit
 from field_states import review_fields
 from ai_runtime import run_job, DEFAULT_MODELS, DEADLINE_SECONDS
-from pdf_viewer import render_pdf_viewer, bind_packet, packet_provenance_manifest
+from pdf_viewer import render_pdf_viewer, bind_packet, packet_provenance_manifest, render_source_evidence
 
 st.set_page_config(page_title='PortShield AI | Document Readiness',page_icon='🛡️',layout='wide')
 st.markdown("""<style>
@@ -194,8 +194,7 @@ with review:
     if states:
         st.dataframe([{'Field':k,'Extraction state':r['status'],'Review':r['review_status'],'Reason':r['reason']} for k,r in states.items()],hide_index=True,use_container_width=True)
     with st.expander('Source extraction evidence',expanded=st.session_state.get('ai_pending',False)):
-        for key,source in st.session_state.evidence.items():
-            st.json(source) if isinstance(source,dict) else st.text(key+' — '+source)
+        render_source_evidence(st.session_state.evidence)
     render_pdf_viewer(st.session_state.get('bound_packet'), st.session_state.evidence)
     with st.form('review_form'):
         vals={};cols=st.columns(3)
@@ -222,7 +221,7 @@ with review:
             with st.expander(f"{result['status']} — {result['check']}",expanded=result['status']!='Passed'):
                 st.write(result['evidence']);st.caption('Evidence refers to confirmed values; edits require reviewer verification against the source.')
         with st.expander('Source extraction evidence'):
-            for k,v in st.session_state.evidence.items():st.write(f'**{k}**: {v}')
+            render_source_evidence(st.session_state.evidence)
         report={'prototype':'PortShield v0.9','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
         st.download_button('Download review report (JSON)',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with actions:

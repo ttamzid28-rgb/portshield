@@ -19,6 +19,7 @@ from pdf_viewer import (
     packet_provenance_manifest,
     _load_documents,
     render_pdf_viewer,
+    render_source_evidence,
     _CACHE_MAX,
 )
 
@@ -645,6 +646,82 @@ class PdfViewerUnitTests(unittest.TestCase):
         # Assert evidence dictionary and review_status are byte-for-byte unmodified
         self.assertEqual(pickle.dumps(evidence), original_evidence_pickle)
         self.assertEqual(evidence['_field_states']['invoice_total']['review_status'], 'pending')
+
+    def test_numeric_boundary_decimal_mismatch_18000_in_18000_50(self):
+        """Enforce strict token boundary: 'Invoice total 18000' must NOT match 'Invoice total 18000.50'."""
+        pdf_bytes = make_text_pdf("Commercial Invoice\nInvoice total 18000.50\nChattogram Port")
+        doc = pymupdf.open(stream=pdf_bytes, filetype='pdf')
+        page = doc[0]
+
+        # 1. Searching for "Invoice total 18000" against "Invoice total 18000.50" must NOT match as full quote
+        res = locate_quote_on_page(pdf_bytes, 0, "Invoice total 18000")
+        self.assertFalse(res['found'])
+        self.assertEqual(find_quote_rects(page, "Invoice total 18000"), [])
+
+        # 2. Searching for standalone "18000" must NOT match
+        res_single = locate_quote_on_page(pdf_bytes, 0, "18000")
+        self.assertFalse(res_single['found'])
+        self.assertFalse(res_single['partial'])
+        self.assertEqual(res_single['label'], "Quote not located visually")
+        self.assertEqual(find_quote_rects(page, "18000"), [])
+
+        # 3. Exact full match with decimal "Invoice total 18000.50" must succeed
+        res_exact = locate_quote_on_page(pdf_bytes, 0, "Invoice total 18000.50")
+        self.assertTrue(res_exact['found'])
+        self.assertFalse(res_exact['partial'])
+        self.assertEqual(res_exact['label'], "Quote located on page")
+        self.assertGreater(len(find_quote_rects(page, "Invoice total 18000.50")), 0)
+        doc.close()
+
+    def test_numeric_boundary_grouping_separator_mismatch_18_in_18_000(self):
+        """Enforce strict token boundary: 'Invoice total 18' must NOT match 'Invoice total 18,000'."""
+        pdf_bytes = make_text_pdf("Commercial Invoice\nInvoice total 18,000\nChattogram Port")
+        doc = pymupdf.open(stream=pdf_bytes, filetype='pdf')
+        page = doc[0]
+
+        # 1. Searching for "Invoice total 18" against "Invoice total 18,000" must NOT match as full quote
+        res = locate_quote_on_page(pdf_bytes, 0, "Invoice total 18")
+        self.assertFalse(res['found'])
+        self.assertEqual(find_quote_rects(page, "Invoice total 18"), [])
+
+        # 2. Searching for standalone "18" must NOT match
+        res_single = locate_quote_on_page(pdf_bytes, 0, "18")
+        self.assertFalse(res_single['found'])
+        self.assertFalse(res_single['partial'])
+        self.assertEqual(res_single['label'], "Quote not located visually")
+        self.assertEqual(find_quote_rects(page, "18"), [])
+
+        # 3. Exact full match with grouping separator "Invoice total 18,000" must succeed
+        res_exact = locate_quote_on_page(pdf_bytes, 0, "Invoice total 18,000")
+        self.assertTrue(res_exact['found'])
+        self.assertFalse(res_exact['partial'])
+        self.assertEqual(res_exact['label'], "Quote located on page")
+        self.assertGreater(len(find_quote_rects(page, "Invoice total 18,000")), 0)
+        doc.close()
+
+    def test_review_screen_provenance_list_rendering_no_crash(self):
+        """Verify evidence containing _packet_provenance as a list of dicts renders safely without TypeError."""
+        evidence = {
+            '_packet_provenance': [
+                {'index': 1, 'name': 'invoice.pdf', 'sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'},
+                {'index': 2, 'name': 'lc.pdf', 'sha256': 'ca978112ca1bbdcafac231b39a23dc4da7860819c196610ae3279e6908324334'},
+            ],
+            '_field_states': {
+                'invoice_total': {'status': 'extracted', 'reason': 'Verified against source'}
+            },
+            'invoice_total': 'Invoice total = 25000',
+            'latest_shipment_date': 'Latest shipment date = 2026-11-10',
+        }
+
+        mock_st = MagicMock()
+        with patch('pdf_viewer.st', mock_st):
+            # Must execute cleanly without TypeError: can only concatenate str (not "list") to str
+            render_source_evidence(evidence)
+
+        # Verify json was used for the list (_packet_provenance) and dict (_field_states)
+        self.assertEqual(mock_st.json.call_count, 2)
+        # Verify text was used for the plain string fields
+        self.assertEqual(mock_st.text.call_count, 2)
 
 
 if __name__ == '__main__':
