@@ -35,7 +35,31 @@
         "description": "SWIFT MT700 Documentary Credit issued by opening bank"
       }
     },
-    "field_lifecycle_note": "Reviewer confirmation preserves original model extraction state while recording review_status ('pending', 'confirmed', 'unresolved') separately."
+    "canonical_to_runtime_adapter_mapping": {
+      "ci_invoice_total": "invoice_total",
+      "ci_currency": "invoice_currency",
+      "ci_quantity": "invoice_quantity",
+      "ci_unit_price": "unit_price",
+      "pl_cargo_net_weight": "packing_quantity",
+      "pl_container_number": "packing_container",
+      "bl_container_number": "bl_container",
+      "lc_amount": "lc_amount",
+      "lc_currency": "lc_currency",
+      "lc_latest_shipment_date": "latest_shipment_date",
+      "bl_on_board_date": "on_board_date"
+    },
+    "weight_tolerance_policy": {
+      "max_weight_delta_kg": 10.0,
+      "rule": "abs(pl_cargo_gross_weight - bl_cargo_gross_weight) <= max_weight_delta_kg",
+      "demonstration_discrepancy_delta_kg": 900.0
+    },
+    "lc_financial_tolerance_policy": {
+      "nominal_face_amount_usd": 25000.00,
+      "tag_39a_tolerance_pct": 5.0,
+      "drawing_ceiling_usd": 26250.00,
+      "rule": "invoice_total <= lc_amount"
+    },
+    "field_lifecycle_note": "Reviewer confirmation preserves original model extraction state (status) while recording review_status ('unreviewed', 'confirmed', 'edited', 'rejected') separately."
   },
   "packets": {
     "chattogram_clean": {
