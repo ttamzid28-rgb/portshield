@@ -131,7 +131,11 @@ def verify_quote_in_page_text(quote: str, page_text: str) -> bool:
     """Verify quote text is contained in page text layer (verbatim or normalized)."""
     if not quote or not page_text:
         return False
-    return quote.strip() in page_text or normalized(quote) in normalized(page_text)
+    return (
+        quote.strip() in page_text
+        or normalized(quote) in normalized(page_text)
+        or collapse_whitespace(quote).casefold() in collapse_whitespace(page_text).casefold()
+    )
 
 
 def verify_quote_in_pdf_page(pdf_bytes: bytes, page_number: int, quote: str) -> bool:
@@ -151,82 +155,184 @@ def verify_quote_in_pdf_page(pdf_bytes: bytes, page_number: int, quote: str) -> 
         return False
 
 
-DISCHARGE_ROLE_LABELS = (
-    r'port\s+of\s+discharge',
-    r'discharge\s+port',
-    r'discharging\s+port',
-    r'port\s+of\s+dest(?:ination)?',
+def collapse_whitespace(text: str) -> str:
+    """Collapse all consecutive whitespace, newlines, and tabs into single spaces, and strip."""
+    if not text:
+        return ''
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+DISCHARGE_ROLE_PATTERNS = (
+    r'\bport\s+of\s+discharge\b',
+    r'\bdischarge\s+port\b',
+    r'\bdischarging\s+port\b',
+    r'\bport\s+of\s+dest(?:ination)?\b',
     r'\bpod\b',
-    r'tag\s*44f',
-    r':?44f:?',
+    r'(?<!\w)(?::\s*)?(?:tag\s*|field\s*)?44f(?::|\b)(?!\w)',
 )
-LOADING_ROLE_LABELS = (
-    r'port\s+of\s+loading',
-    r'loading\s+port',
-    r'port\s+of\s+receipt',
-    r'place\s+of\s+receipt',
-    r'taking\s+in\s+charge',
+DISCHARGE_ROLE_LABELS = DISCHARGE_ROLE_PATTERNS
+
+LOADING_ROLE_PATTERNS = (
+    r'\bport\s+of\s+loading\b',
+    r'\bloading\s+port\b',
+    r'\bport\s+of\s+receipt\b',
+    r'\bplace\s+of\s+receipt\b',
+    r'\btaking\s+in\s+charge\b',
     r'\bpol\b',
-    r'tag\s*44e',
-    r':?44e:?',
-    r'tag\s*44a',
-    r':?44a:?',
+    r'(?<!\w)(?::\s*)?(?:tag\s*|field\s*)?44e(?::|\b)(?!\w)',
+    r'(?<!\w)(?::\s*)?(?:tag\s*|field\s*)?44a(?::|\b)(?!\w)',
 )
-DELIVERY_ROLE_LABELS = (
-    r'place\s+of\s+delivery',
-    r'final\s+destination',
-    r'delivery\s+place',
-    r'tag\s*44b',
-    r':?44b:?',
+LOADING_ROLE_LABELS = LOADING_ROLE_PATTERNS
+
+DELIVERY_ROLE_PATTERNS = (
+    r'\bplace\s+of\s+delivery\b',
+    r'\bfinal\s+destination\b',
+    r'\bdelivery\s+place\b',
+    r'(?<!\w)(?::\s*)?(?:tag\s*|field\s*)?44b(?::|\b)(?!\w)',
 )
+DELIVERY_ROLE_LABELS = DELIVERY_ROLE_PATTERNS
+
+FIELD_DELIMITER_RE = re.compile(r'\|+|;|/{2,}|\t')
+
+
+def parse_field_headers(text: str) -> list[dict]:
+    """Identify the start and end offsets of all port role headers in normalized text."""
+    raw_matches = []
+    for pat in DISCHARGE_ROLE_PATTERNS:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            raw_matches.append({'role': 'discharge', 'start': m.start(), 'end': m.end()})
+    for pat in LOADING_ROLE_PATTERNS:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            raw_matches.append({'role': 'loading', 'start': m.start(), 'end': m.end()})
+    for pat in DELIVERY_ROLE_PATTERNS:
+        for m in re.finditer(pat, text, re.IGNORECASE):
+            raw_matches.append({'role': 'delivery', 'start': m.start(), 'end': m.end()})
+
+    raw_matches.sort(key=lambda x: (x['start'], -(x['end'] - x['start'])))
+    filtered = []
+    for m in raw_matches:
+        if not filtered:
+            filtered.append(m)
+            continue
+        if m['start'] < filtered[-1]['end']:
+            continue
+        filtered.append(m)
+    return filtered
+
+
+def compute_field_spans(text: str) -> list[dict]:
+    """Calculate explicit value spans bounded by subsequent headers or delimiters."""
+    headers = parse_field_headers(text)
+    spans = []
+    for i, h in enumerate(headers):
+        m_sep = re.match(r'[\s:\-=]+', text[h['end']:])
+        span_start = h['end'] + (m_sep.end() if m_sep else 0)
+        span_end = len(text)
+        if i + 1 < len(headers):
+            span_end = min(span_end, headers[i + 1]['start'])
+        m_delim = FIELD_DELIMITER_RE.search(text, span_start, span_end)
+        if m_delim:
+            span_end = min(span_end, m_delim.start())
+
+        # Trim whitespace from span boundaries
+        while span_start < span_end and text[span_start].isspace():
+            span_start += 1
+        while span_end > span_start and text[span_end - 1].isspace():
+            span_end -= 1
+
+        spans.append({
+            'role': h['role'],
+            'header_start': h['start'],
+            'header_end': h['end'],
+            'span_start': span_start,
+            'span_end': span_end,
+            'span_text': text[span_start:span_end],
+        })
+    return spans
 
 
 def check_port_quote_role(key: str, value: str, quote: str) -> tuple[bool, str]:
-    """Verify that quote appears in the legitimate field context and not under conflicting role labels."""
-    q_lower = quote.casefold()
+    """Verify that candidate value appears in the legitimate field context and within its explicit value span."""
+    if not isinstance(value, str) or not isinstance(quote, str):
+        return False, 'Value and source quotation must be text.'
+
+    norm_val = collapse_whitespace(value)
+    norm_quote = collapse_whitespace(quote)
+
+    if not norm_val or not norm_quote:
+        return False, 'Candidate value or quotation is empty.'
 
     if key in ('lc_port_of_discharge', 'bl_port_of_discharge'):
-        has_discharge = any(re.search(pat, q_lower) for pat in DISCHARGE_ROLE_LABELS)
-        has_loading = any(re.search(pat, q_lower) for pat in LOADING_ROLE_LABELS)
-        has_delivery = any(re.search(pat, q_lower) for pat in DELIVERY_ROLE_LABELS)
-
-        if not has_discharge:
-            if has_loading:
-                return False, 'Quotation belongs to Port of Loading context, not Port of Discharge.'
-            if has_delivery:
-                return False, 'Quotation belongs to Place of Delivery context, not Port of Discharge.'
-            return False, 'Quotation lacks the required Port of Discharge label (e.g., Port of Discharge or Tag 44F).'
-
-        if has_loading or has_delivery:
-            val_idx = q_lower.find(value.casefold())
-            if val_idx != -1:
-                prefix = q_lower[:val_idx]
-                last_discharge = max((m.start() for pat in DISCHARGE_ROLE_LABELS for m in re.finditer(pat, prefix)), default=-1)
-                last_conflicting = max((m.start() for pat in (LOADING_ROLE_LABELS + DELIVERY_ROLE_LABELS) for m in re.finditer(pat, prefix)), default=-1)
-                if last_conflicting != -1 and last_conflicting > last_discharge:
-                    return False, 'Candidate value in quotation is qualified by a conflicting role label (Port of Loading / Place of Delivery).'
-
-        return True, ''
-
+        target_role = 'discharge'
+        target_label = 'Port of Discharge'
+        conflicting_desc = 'Port of Loading / Place of Delivery'
     elif key == 'bl_port_of_loading':
-        has_loading = any(re.search(pat, q_lower) for pat in LOADING_ROLE_LABELS)
-        has_discharge = any(re.search(pat, q_lower) for pat in DISCHARGE_ROLE_LABELS)
-        if not has_loading:
-            if has_discharge:
-                return False, 'Quotation belongs to Port of Discharge context, not Port of Loading.'
-            return False, 'Quotation lacks the required Port of Loading label.'
-        return True, ''
-
+        target_role = 'loading'
+        target_label = 'Port of Loading'
+        conflicting_desc = 'Port of Discharge / Place of Delivery'
     elif key == 'bl_place_of_delivery':
-        has_delivery = any(re.search(pat, q_lower) for pat in DELIVERY_ROLE_LABELS)
-        has_discharge = any(re.search(pat, q_lower) for pat in DISCHARGE_ROLE_LABELS)
-        if not has_delivery:
-            if has_discharge:
-                return False, 'Quotation belongs to Port of Discharge context, not Place of Delivery.'
-            return False, 'Quotation lacks the required Place of Delivery label.'
-        return True, ''
+        target_role = 'delivery'
+        target_label = 'Place of Delivery'
+        conflicting_desc = 'Port of Loading / Port of Discharge'
+    else:
+        return False, f'Unregistered or unknown field: {key}'
 
-    return True, ''
+    headers = parse_field_headers(norm_quote)
+    has_target = any(h['role'] == target_role for h in headers)
+
+    if not has_target:
+        conflicting = [h['role'] for h in headers if h['role'] != target_role]
+        if 'loading' in conflicting and target_role in ('discharge', 'delivery'):
+            return False, f'Quotation belongs to Port of Loading context, not {target_label}.'
+        if 'delivery' in conflicting and target_role in ('discharge', 'loading'):
+            return False, f'Quotation belongs to Place of Delivery context, not {target_label}.'
+        if 'discharge' in conflicting and target_role in ('loading', 'delivery'):
+            return False, f'Quotation belongs to Port of Discharge context, not {target_label}.'
+        if target_role == 'discharge':
+            return False, 'Quotation lacks the required Port of Discharge label (e.g., Port of Discharge or Tag 44F).'
+        elif target_role == 'loading':
+            return False, 'Quotation lacks the required Port of Loading label.'
+        elif target_role == 'delivery':
+            return False, 'Quotation lacks the required Place of Delivery label.'
+
+    val_lower = norm_val.casefold()
+    quote_lower = norm_quote.casefold()
+
+    val_pat = r'(?:\b|\A)' + re.escape(val_lower) + r'(?:\b|\Z)'
+    val_matches = [(m.start(), m.end()) for m in re.finditer(val_pat, quote_lower)]
+    if not val_matches:
+        start = 0
+        while True:
+            idx = quote_lower.find(val_lower, start)
+            if idx == -1:
+                break
+            val_matches.append((idx, idx + len(val_lower)))
+            start = idx + 1
+
+    if not val_matches:
+        return False, 'Port value is absent from or not contained in source quotation.'
+
+    spans = compute_field_spans(norm_quote)
+
+    # 1. Check if any occurrence falls strictly within a target role span
+    for m_start, m_end in val_matches:
+        for sp in spans:
+            if sp['role'] == target_role and sp['span_start'] <= m_start and m_end <= sp['span_end']:
+                return True, ''
+
+    # 2. Check if any occurrence falls within a conflicting role span
+    for m_start, m_end in val_matches:
+        for sp in spans:
+            if sp['role'] != target_role and sp['span_start'] <= m_start and m_end <= sp['span_end']:
+                return False, f'Candidate value in quotation is qualified by a conflicting role label ({conflicting_desc}).'
+
+    # 3. Check if candidate appears strictly before the target header
+    first_target = min((h['start'] for h in headers if h['role'] == target_role), default=-1)
+    if any(m_end <= first_target for m_start, m_end in val_matches):
+        return False, f'Candidate value in quotation appears before the {target_label} label and belongs to preceding field context.'
+
+    # 4. Outside target span or ambiguous
+    return False, f'Candidate value in quotation is outside the {target_label} value span.'
 
 
 def validate_value(key, value, quote):
@@ -267,13 +373,16 @@ def validate_value(key, value, quote):
         if _quoted_date(quote)!=value:
             return '', 'Date is absent, ambiguous, or conflicts with its source quotation; manual review required.'
     elif key in PORT_FIELDS:
-        if len(value) < 3 or len(value) > 120:
+        val_clean = collapse_whitespace(value)
+        quote_clean = collapse_whitespace(quote)
+        if len(val_clean) < 3 or len(val_clean) > 120:
             return '', 'Port name must be between 3 and 120 characters.'
-        if normalized(value) not in normalized(quote):
+        if val_clean.casefold() not in quote_clean.casefold():
             return '', 'Port value is absent from or not contained in source quotation.'
-        ok, role_err = check_port_quote_role(key, value, quote)
+        ok, role_err = check_port_quote_role(key, val_clean, quote_clean)
         if not ok:
             return '', role_err
+        return val_clean, ''
     else:
         return '', f'Unregistered or unknown field: {key}'
     return value,''

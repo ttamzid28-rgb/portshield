@@ -154,6 +154,189 @@ class PortFieldValidationTests(unittest.TestCase):
         self.assertFalse(val_del)
         self.assertIn('Place of Delivery context', err_del)
 
+    def test_wrapped_discharge_port_role_validation(self):
+        """Wrapped candidate text (e.g. Port of Discharge: Chattogram\\nSea Port) matches properly and returns valid extracted status."""
+        import pymupdf
+        from field_states import collect_fields
+
+        quote_text = "Port of Discharge: Chattogram\nSea Port"
+        candidate_val = "Chattogram Sea Port"
+
+        # 1. Direct validate_value test
+        val, err = validate_value("bl_port_of_discharge", candidate_val, quote_text)
+        self.assertEqual(val, "Chattogram Sea Port")
+        self.assertEqual(err, "")
+
+        # 2. PDF-backed collect_fields test
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text(pymupdf.Point(50, 100), "OCEAN BILL OF LADING", fontsize=14)
+        page.insert_text(pymupdf.Point(50, 150), quote_text, fontsize=10)
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        packet = [("bill_of_lading.pdf", pdf_bytes)]
+        page_text = {(1, 1): f"OCEAN BILL OF LADING\n{quote_text}"}
+
+        entry = {
+            "field": "bl_port_of_discharge",
+            "value": candidate_val,
+            "quote": quote_text,
+            "document": 1,
+            "page": 1,
+        }
+        values, evidence = collect_fields([entry], ["bl_port_of_discharge"], packet, page_text)
+        field_state = evidence["_field_states"]["bl_port_of_discharge"]
+        self.assertEqual(field_state["status"], "extracted")
+        self.assertEqual(values["bl_port_of_discharge"], "Chattogram Sea Port")
+
+    def test_candidate_before_discharge_label_rejected(self):
+        """Input 'Chattogram | Port of Discharge: Mongla Port' rejects 'Chattogram' as bl_port_of_discharge."""
+        import pymupdf
+        from field_states import collect_fields
+
+        quote_text = "Chattogram | Port of Discharge: Mongla Port"
+        candidate_val = "Chattogram"
+
+        # 1. Direct validate_value test
+        val, err = validate_value("bl_port_of_discharge", candidate_val, quote_text)
+        self.assertEqual(val, "")
+        self.assertTrue("before the Port of Discharge label" in err or "preceding field context" in err)
+
+        # 2. PDF-backed collect_fields test
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text(pymupdf.Point(50, 100), "OCEAN BILL OF LADING", fontsize=14)
+        page.insert_text(pymupdf.Point(50, 150), quote_text, fontsize=10)
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        packet = [("bill_of_lading.pdf", pdf_bytes)]
+        page_text = {(1, 1): f"OCEAN BILL OF LADING\n{quote_text}"}
+
+        entry = {
+            "field": "bl_port_of_discharge",
+            "value": candidate_val,
+            "quote": quote_text,
+            "document": 1,
+            "page": 1,
+        }
+        values, evidence = collect_fields([entry], ["bl_port_of_discharge"], packet, page_text)
+        field_state = evidence["_field_states"]["bl_port_of_discharge"]
+        self.assertEqual(field_state["status"], "rejected")
+        self.assertEqual(values["bl_port_of_discharge"], "")
+
+    def test_multi_field_quotation_role_isolation(self):
+        """Input 'Port of Loading: Chattogram Sea Port | Port of Discharge: Mongla Port' rejects 'Chattogram Sea Port' for discharge, while accepting 'Mongla Port'."""
+        import pymupdf
+        from field_states import collect_fields
+
+        quote_text = "Port of Loading: Chattogram\nSea Port | Port of Discharge: Mongla Port"
+
+        # 1. Direct validate_value test
+        val_cgp, err_cgp = validate_value("bl_port_of_discharge", "Chattogram Sea Port", quote_text)
+        self.assertEqual(val_cgp, "")
+        self.assertIn("conflicting role label", err_cgp)
+
+        val_mgl, err_mgl = validate_value("bl_port_of_discharge", "Mongla Port", quote_text)
+        self.assertEqual(val_mgl, "Mongla Port")
+        self.assertEqual(err_mgl, "")
+
+        # 2. PDF-backed collect_fields test
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text(pymupdf.Point(50, 100), "OCEAN BILL OF LADING", fontsize=14)
+        page.insert_text(pymupdf.Point(50, 150), quote_text, fontsize=10)
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        packet = [("bill_of_lading.pdf", pdf_bytes)]
+        page_text = {(1, 1): f"OCEAN BILL OF LADING\n{quote_text}"}
+
+        # Candidate under loading role is rejected
+        entry_cgp = {
+            "field": "bl_port_of_discharge",
+            "value": "Chattogram Sea Port",
+            "quote": quote_text,
+            "document": 1,
+            "page": 1,
+        }
+        values_cgp, evidence_cgp = collect_fields([entry_cgp], ["bl_port_of_discharge"], packet, page_text)
+        self.assertEqual(evidence_cgp["_field_states"]["bl_port_of_discharge"]["status"], "rejected")
+        self.assertEqual(values_cgp["bl_port_of_discharge"], "")
+
+        # Candidate under discharge role is accepted
+        entry_mgl = {
+            "field": "bl_port_of_discharge",
+            "value": "Mongla Port",
+            "quote": quote_text,
+            "document": 1,
+            "page": 1,
+        }
+        values_mgl, evidence_mgl = collect_fields([entry_mgl], ["bl_port_of_discharge"], packet, page_text)
+        self.assertEqual(evidence_mgl["_field_states"]["bl_port_of_discharge"]["status"], "extracted")
+        self.assertEqual(values_mgl["bl_port_of_discharge"], "Mongla Port")
+
+    def test_collect_fields_pipeline_field_role_governance(self):
+        """Run full collect_fields() on documents with conflicting headers and assert that bl_port_of_discharge is strictly governed by the discharge span."""
+        import pymupdf
+        from field_states import collect_fields
+
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text(pymupdf.Point(50, 100), "OCEAN BILL OF LADING", fontsize=14)
+        page.insert_text(pymupdf.Point(50, 150), "Port of Loading: Busan, South Korea", fontsize=10)
+        page.insert_text(pymupdf.Point(50, 180), "Port of Discharge: Mongla Port, Bangladesh", fontsize=10)
+        page.insert_text(pymupdf.Point(50, 210), "Place of Delivery: Dhaka, Bangladesh", fontsize=10)
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        packet = [("bill_of_lading.pdf", pdf_bytes)]
+        page_text = {
+            (1, 1): (
+                "OCEAN BILL OF LADING\n"
+                "Port of Loading: Busan, South Korea\n"
+                "Port of Discharge: Mongla Port, Bangladesh\n"
+                "Place of Delivery: Dhaka, Bangladesh"
+            )
+        }
+
+        # 1. Proposing Loading candidate as Discharge port is rejected
+        entry_loading = {
+            "field": "bl_port_of_discharge",
+            "value": "Busan, South Korea",
+            "quote": "Port of Loading: Busan, South Korea",
+            "document": 1,
+            "page": 1,
+        }
+        values_load, evidence_load = collect_fields([entry_loading], ["bl_port_of_discharge"], packet, page_text)
+        self.assertEqual(evidence_load["_field_states"]["bl_port_of_discharge"]["status"], "rejected")
+        self.assertEqual(values_load["bl_port_of_discharge"], "")
+
+        # 2. Proposing Delivery candidate as Discharge port is rejected
+        entry_delivery = {
+            "field": "bl_port_of_discharge",
+            "value": "Dhaka, Bangladesh",
+            "quote": "Place of Delivery: Dhaka, Bangladesh",
+            "document": 1,
+            "page": 1,
+        }
+        values_del, evidence_del = collect_fields([entry_delivery], ["bl_port_of_discharge"], packet, page_text)
+        self.assertEqual(evidence_del["_field_states"]["bl_port_of_discharge"]["status"], "rejected")
+        self.assertEqual(values_del["bl_port_of_discharge"], "")
+
+        # 3. Legitimate Discharge candidate is accepted and governs bl_port_of_discharge
+        entry_discharge = {
+            "field": "bl_port_of_discharge",
+            "value": "Mongla Port, Bangladesh",
+            "quote": "Port of Discharge: Mongla Port, Bangladesh",
+            "document": 1,
+            "page": 1,
+        }
+        values_dis, evidence_dis = collect_fields([entry_discharge], ["bl_port_of_discharge"], packet, page_text)
+        self.assertEqual(evidence_dis["_field_states"]["bl_port_of_discharge"]["status"], "extracted")
+        self.assertEqual(values_dis["bl_port_of_discharge"], "Mongla Port, Bangladesh")
+
 
 class ExtractionIntegrationTests(unittest.TestCase):
     def test_wrong_date_is_omitted_while_valid_amount_survives(self):
