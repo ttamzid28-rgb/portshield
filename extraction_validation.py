@@ -134,7 +134,6 @@ def verify_quote_in_page_text(quote: str, page_text: str) -> bool:
     return (
         quote.strip() in page_text
         or normalized(quote) in normalized(page_text)
-        or collapse_whitespace(quote).casefold() in collapse_whitespace(page_text).casefold()
     )
 
 
@@ -193,6 +192,11 @@ DELIVERY_ROLE_PATTERNS = (
 DELIVERY_ROLE_LABELS = DELIVERY_ROLE_PATTERNS
 
 FIELD_DELIMITER_RE = re.compile(r'\|+|;|/{2,}|\t')
+OTHER_FIELD_HEADER_RE = re.compile(
+    r'\b(?:notify\s+party|consignee|shipper|also\s+notify|vessel|voyage|'
+    r'booking\s+(?:number|no)|bill\s+of\s+lading\s+(?:number|no)|'
+    r'container\s+(?:number|no)|seal\s+(?:number|no)|'
+    r'gross\s+weight|net\s+weight|description\s+of\s+goods)\s*:', re.I)
 
 
 def parse_field_headers(text: str) -> list[dict]:
@@ -233,6 +237,14 @@ def compute_field_spans(text: str) -> list[dict]:
         m_delim = FIELD_DELIMITER_RE.search(text, span_start, span_end)
         if m_delim:
             span_end = min(span_end, m_delim.start())
+
+        other_header = OTHER_FIELD_HEADER_RE.search(text, span_start, span_end)
+        if other_header:
+            span_end = other_header.start()
+        # An unrecognized labelled field makes the remaining span ambiguous.
+        # Do not guess its boundary or borrow its value as the port.
+        if ':' in text[span_start:span_end]:
+            span_end = span_start
 
         # Trim whitespace from span boundaries
         while span_start < span_end and text[span_start].isspace():
@@ -298,16 +310,8 @@ def check_port_quote_role(key: str, value: str, quote: str) -> tuple[bool, str]:
     val_lower = norm_val.casefold()
     quote_lower = norm_quote.casefold()
 
-    val_pat = r'(?:\b|\A)' + re.escape(val_lower) + r'(?:\b|\Z)'
+    val_pat = r'(?<!\w)' + re.escape(val_lower) + r'(?!\w)'
     val_matches = [(m.start(), m.end()) for m in re.finditer(val_pat, quote_lower)]
-    if not val_matches:
-        start = 0
-        while True:
-            idx = quote_lower.find(val_lower, start)
-            if idx == -1:
-                break
-            val_matches.append((idx, idx + len(val_lower)))
-            start = idx + 1
 
     if not val_matches:
         return False, 'Port value is absent from or not contained in source quotation.'
@@ -317,7 +321,7 @@ def check_port_quote_role(key: str, value: str, quote: str) -> tuple[bool, str]:
     # 1. Check if any occurrence falls strictly within a target role span
     for m_start, m_end in val_matches:
         for sp in spans:
-            if sp['role'] == target_role and sp['span_start'] <= m_start and m_end <= sp['span_end']:
+            if sp['role'] == target_role and sp['span_start'] == m_start and m_end <= sp['span_end']:
                 return True, ''
 
     # 2. Check if any occurrence falls within a conflicting role span

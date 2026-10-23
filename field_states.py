@@ -1,5 +1,5 @@
 """Field lifecycle: retain extraction state separately from human confirmation."""
-from extraction_validation import normalized, validate_value, collapse_whitespace
+from extraction_validation import normalized, validate_value
 from decimal import Decimal
 
 
@@ -30,8 +30,7 @@ def collect_fields(entries, field_names, packet, page_text):
                 reason = 'Quotation not found on cited page.'
             else:
                 value, reason = validate_value(key, value, quote)
-        elif (normalized(quote) not in normalized(page_text[(doc, page)]) and
-              collapse_whitespace(quote).casefold() not in collapse_whitespace(page_text[(doc, page)]).casefold()):
+        elif normalized(quote) not in normalized(page_text[(doc, page)]):
             reason = 'Quotation not found on cited page.'
         else:
             value, reason = validate_value(key, value, quote)
