@@ -24,13 +24,29 @@ def collect_fields(entries, field_names, packet, page_text):
             reason = 'Invalid source document/page.'
         elif not page_text[(doc, page)].strip():
             status = 'unreadable'; reason = 'Cited page has no independently readable text; visual confirmation required.'
+        elif type(doc) is int and 1 <= doc <= len(packet) and packet[doc-1][1].startswith(b'%PDF'):
+            from extraction_validation import verify_quote_in_pdf_page
+            if not verify_quote_in_pdf_page(packet[doc-1][1], page, quote):
+                reason = 'Quotation not found on cited page.'
+            else:
+                value, reason = validate_value(key, value, quote)
         elif normalized(quote) not in normalized(page_text[(doc, page)]):
             reason = 'Quotation not found on cited page.'
         else:
             value, reason = validate_value(key, value, quote)
         if reason and status != 'unreadable': status = 'rejected'
-        record['candidates'].append({'value': item.get('value'), 'quote': quote, 'document': doc, 'page': page,
-                     'status': status, 'reason': reason, 'validated_value': value if status == 'extracted' else ''})
+        cand = {
+            'value': item.get('value'),
+            'quote': quote,
+            'document': doc,
+            'page': page,
+            'document_type': item.get('document_type', ''),
+            'char_offsets': item.get('char_offsets'),
+            'status': status,
+            'reason': reason,
+            'validated_value': value if status == 'extracted' else ''
+        }
+        record['candidates'].append(cand)
         if reason:evidence['_rejected'] = evidence.get('_rejected', '') + f' {key}: {reason}'
         if type(doc) is int and 1 <= doc <= len(packet):
             evidence[key] = evidence.get(key, '') + f'\n{packet[doc-1][0]} · page {page} · AI-cited text (verify): {str(quote)[:1000]}'
@@ -58,3 +74,4 @@ def usable_values(values, states):
     if states is None:return values
     return {k: v if states.get(k, {}).get('review_status') == 'confirmed'
             and states[k].get('reviewed_value') == str(v or '').strip() else '' for k, v in values.items()}
+

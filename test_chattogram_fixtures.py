@@ -57,7 +57,7 @@ def iso6346_check_digit(container_num: str) -> int:
 
 def map_canonical_to_engine(fields: dict) -> dict:
     """Map canonical answer-key fields to checks.py audit engine input schema."""
-    return {
+    res = {
         "lc_currency": fields["lc_currency"]["value"],
         "invoice_currency": fields["ci_currency"]["value"],
         "invoice_quantity": fields["ci_quantity"]["value"],
@@ -70,6 +70,15 @@ def map_canonical_to_engine(fields: dict) -> dict:
         "on_board_date": fields["bl_on_board_date"]["value"],
         "latest_shipment_date": fields["lc_latest_shipment_date"]["value"],
     }
+    if "lc_port_of_discharge" in fields:
+        res["lc_port_of_discharge"] = fields["lc_port_of_discharge"]["value"]
+    if "bl_port_of_discharge" in fields:
+        res["bl_port_of_discharge"] = fields["bl_port_of_discharge"]["value"]
+    if "bl_port_of_loading" in fields:
+        res["bl_port_of_loading"] = fields["bl_port_of_loading"]["value"]
+    if "bl_place_of_delivery" in fields:
+        res["bl_place_of_delivery"] = fields["bl_place_of_delivery"]["value"]
+    return res
 
 
 class TestChattogramFixtures(unittest.TestCase):
@@ -168,7 +177,7 @@ class TestChattogramFixtures(unittest.TestCase):
                 )
 
     def test_behavioral_audit_engine_execution_on_clean_packet(self):
-        """Execute live checks.py:audit() on mapped clean packet values; all 6 checks must return 'Passed'."""
+        """Execute live checks.py:audit() on mapped clean packet values; all 7 checks must return 'Passed'."""
         with open(ANSWER_KEY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -177,7 +186,7 @@ class TestChattogramFixtures(unittest.TestCase):
 
         # Run live audit routine from checks.py
         findings = audit(engine_input)
-        self.assertEqual(len(findings), 6, "Audit routine must return exactly 6 findings")
+        self.assertEqual(len(findings), 7, f"Audit routine must return exactly 7 findings, got {len(findings)}")
 
         for finding in findings:
             self.assertEqual(
@@ -185,9 +194,11 @@ class TestChattogramFixtures(unittest.TestCase):
                 "Passed",
                 f"Engine check '{finding['check']}' unexpectedly failed on clean packet: {finding['evidence']}",
             )
+        port_check = next(f for f in findings if f["check"] == "Port of discharge consistency")
+        self.assertEqual(port_check["status"], "Passed")
 
     def test_behavioral_audit_engine_execution_on_discrepancy_packet(self):
-        """Execute live checks.py:audit() on discrepancy packet; all 6 baseline checks must STILL return 'Passed'."""
+        """Execute live checks.py:audit() on discrepancy packet; 6 baseline pass, Check 1 evaluates to 'Review required' (DISC-01)."""
         with open(ANSWER_KEY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -196,14 +207,43 @@ class TestChattogramFixtures(unittest.TestCase):
 
         # Run live audit routine from checks.py
         findings = audit(engine_input)
-        self.assertEqual(len(findings), 6, "Audit routine must return exactly 6 findings")
+        self.assertEqual(len(findings), 7, f"Audit routine must return exactly 7 findings, got {len(findings)}")
+
+        for finding in findings:
+            if finding["check"] == "Port of discharge consistency":
+                self.assertEqual(
+                    finding["status"],
+                    "Review required",
+                    f"Check 1 '{finding['check']}' must flag discrepancy DISC-01: {finding['evidence']}",
+                )
+                self.assertIn("Mongla", finding["evidence"])
+                self.assertIn("Chattogram", finding["evidence"])
+            else:
+                self.assertEqual(
+                    finding["status"],
+                    "Passed",
+                    f"Baseline check '{finding['check']}' should remain unaffected on discrepancy packet: {finding['evidence']}",
+                )
+
+    def test_behavioral_audit_engine_execution_on_corrected_packet(self):
+        """Execute live checks.py:audit() on corrected packet values; all 7 checks must return 'Passed'."""
+        with open(ANSWER_KEY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        corr_fields = data["packets"]["chattogram_corrected"]["extracted_fields"]
+        engine_input = map_canonical_to_engine(corr_fields)
+
+        findings = audit(engine_input)
+        self.assertEqual(len(findings), 7, f"Audit routine must return exactly 7 findings, got {len(findings)}")
 
         for finding in findings:
             self.assertEqual(
                 finding["status"],
                 "Passed",
-                f"Baseline check '{finding['check']}' should remain unaffected on discrepancy packet: {finding['evidence']}",
+                f"Engine check '{finding['check']}' unexpectedly failed on corrected packet: {finding['evidence']}",
             )
+        port_check = next(f for f in findings if f["check"] == "Port of discharge consistency")
+        self.assertEqual(port_check["status"], "Passed")
 
     def test_direct_cargo_gross_weight_discrepancy_calculation(self):
         """Calculate cargo gross weight discrepancy directly from pl_cargo_gross_weight and bl_cargo_gross_weight."""

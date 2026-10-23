@@ -17,7 +17,7 @@ class FieldStateTests(unittest.TestCase):
         states=review_fields(values,evidence['_field_states'])
         self.assertEqual(states['invoice_total']['status'],'missing')
         self.assertEqual(states['invoice_total']['review_status'],'unresolved')
-        self.assertTrue(all(r['status']=='Incomplete' for r in audit(values,states)))
+        self.assertTrue(all(r['status'] in ('Incomplete', 'Insufficient data') for r in audit(values,states)))
     def test_conflict_stays_conflict_after_repeated_value(self):
         values,evidence=self.collect([self.entry(),self.entry('19000','Invoice total 19000'),self.entry()])
         self.assertEqual(values['invoice_total'],'')
@@ -35,7 +35,7 @@ class FieldStateTests(unittest.TestCase):
     def test_pending_cannot_pass_even_with_values(self):
         values,evidence=self.collect([self.entry()])
         values['lc_amount']='20000'
-        self.assertTrue(all(r['status']=='Incomplete' for r in audit(values,evidence['_field_states'])))
+        self.assertTrue(all(r['status'] in ('Incomplete', 'Insufficient data') for r in audit(values,evidence['_field_states'])))
         reviewed=review_fields(values,evidence['_field_states'])
         self.assertEqual(audit(values,reviewed)[3]['status'],'Passed')
         values['invoice_total']='17000'
