@@ -47,7 +47,8 @@ with overview:
     st.caption('Fictional demonstration case · Destination: Chattogram · No bank or customs approval implied')
     cols=st.columns(3)
     for col,status in zip(cols,['Passed','Review required','Incomplete']):
-        col.metric(status,sum(x['status']==status for x in current))
+        count = sum(x['status'] in (status, 'Insufficient data') if status == 'Incomplete' else x['status'] == status for x in current)
+        col.metric(status, count)
     st.subheader('Cross-document reconciliation')
     d=st.session_state.fields
     def v(k): return d.get(k,'') or 'Not available'
@@ -216,7 +217,9 @@ with review:
     if 'results' in st.session_state:
         results=st.session_state.results
         cols=st.columns(3)
-        for col,status in zip(cols,['Passed','Review required','Incomplete']):col.metric(status,sum(x['status']==status for x in results))
+        for col,status in zip(cols,['Passed','Review required','Incomplete']):
+            count = sum(x['status'] in (status, 'Insufficient data') if status == 'Incomplete' else x['status'] == status for x in results)
+            col.metric(status, count)
         previous={x['check']:x['status'] for x in st.session_state.get('previous',[])}
         resolved=[x['check'] for x in results if x['status']=='Passed' and previous.get(x['check'])=='Review required']
         if resolved:st.success('Resolved since previous run: '+', '.join(resolved))

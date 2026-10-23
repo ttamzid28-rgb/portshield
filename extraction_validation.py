@@ -151,6 +151,84 @@ def verify_quote_in_pdf_page(pdf_bytes: bytes, page_number: int, quote: str) -> 
         return False
 
 
+DISCHARGE_ROLE_LABELS = (
+    r'port\s+of\s+discharge',
+    r'discharge\s+port',
+    r'discharging\s+port',
+    r'port\s+of\s+dest(?:ination)?',
+    r'\bpod\b',
+    r'tag\s*44f',
+    r':?44f:?',
+)
+LOADING_ROLE_LABELS = (
+    r'port\s+of\s+loading',
+    r'loading\s+port',
+    r'port\s+of\s+receipt',
+    r'place\s+of\s+receipt',
+    r'taking\s+in\s+charge',
+    r'\bpol\b',
+    r'tag\s*44e',
+    r':?44e:?',
+    r'tag\s*44a',
+    r':?44a:?',
+)
+DELIVERY_ROLE_LABELS = (
+    r'place\s+of\s+delivery',
+    r'final\s+destination',
+    r'delivery\s+place',
+    r'tag\s*44b',
+    r':?44b:?',
+)
+
+
+def check_port_quote_role(key: str, value: str, quote: str) -> tuple[bool, str]:
+    """Verify that quote appears in the legitimate field context and not under conflicting role labels."""
+    q_lower = quote.casefold()
+
+    if key in ('lc_port_of_discharge', 'bl_port_of_discharge'):
+        has_discharge = any(re.search(pat, q_lower) for pat in DISCHARGE_ROLE_LABELS)
+        has_loading = any(re.search(pat, q_lower) for pat in LOADING_ROLE_LABELS)
+        has_delivery = any(re.search(pat, q_lower) for pat in DELIVERY_ROLE_LABELS)
+
+        if not has_discharge:
+            if has_loading:
+                return False, 'Quotation belongs to Port of Loading context, not Port of Discharge.'
+            if has_delivery:
+                return False, 'Quotation belongs to Place of Delivery context, not Port of Discharge.'
+            return False, 'Quotation lacks the required Port of Discharge label (e.g., Port of Discharge or Tag 44F).'
+
+        if has_loading or has_delivery:
+            val_idx = q_lower.find(value.casefold())
+            if val_idx != -1:
+                prefix = q_lower[:val_idx]
+                last_discharge = max((m.start() for pat in DISCHARGE_ROLE_LABELS for m in re.finditer(pat, prefix)), default=-1)
+                last_conflicting = max((m.start() for pat in (LOADING_ROLE_LABELS + DELIVERY_ROLE_LABELS) for m in re.finditer(pat, prefix)), default=-1)
+                if last_conflicting != -1 and last_conflicting > last_discharge:
+                    return False, 'Candidate value in quotation is qualified by a conflicting role label (Port of Loading / Place of Delivery).'
+
+        return True, ''
+
+    elif key == 'bl_port_of_loading':
+        has_loading = any(re.search(pat, q_lower) for pat in LOADING_ROLE_LABELS)
+        has_discharge = any(re.search(pat, q_lower) for pat in DISCHARGE_ROLE_LABELS)
+        if not has_loading:
+            if has_discharge:
+                return False, 'Quotation belongs to Port of Discharge context, not Port of Loading.'
+            return False, 'Quotation lacks the required Port of Loading label.'
+        return True, ''
+
+    elif key == 'bl_place_of_delivery':
+        has_delivery = any(re.search(pat, q_lower) for pat in DELIVERY_ROLE_LABELS)
+        has_discharge = any(re.search(pat, q_lower) for pat in DISCHARGE_ROLE_LABELS)
+        if not has_delivery:
+            if has_discharge:
+                return False, 'Quotation belongs to Port of Discharge context, not Place of Delivery.'
+            return False, 'Quotation lacks the required Place of Delivery label.'
+        return True, ''
+
+    return True, ''
+
+
 def validate_value(key, value, quote):
     if not all(isinstance(v, str) for v in (key, value, quote)):
         return '', 'Value and source quotation must be text.'
@@ -193,6 +271,9 @@ def validate_value(key, value, quote):
             return '', 'Port name must be between 3 and 120 characters.'
         if normalized(value) not in normalized(quote):
             return '', 'Port value is absent from or not contained in source quotation.'
+        ok, role_err = check_port_quote_role(key, value, quote)
+        if not ok:
+            return '', role_err
     else:
         return '', f'Unregistered or unknown field: {key}'
     return value,''

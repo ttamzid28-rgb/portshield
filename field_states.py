@@ -72,7 +72,6 @@ def review_fields(values, states):
 
 def usable_values(values, states):
     if states is None:return values
-    return {k: v if (states.get(k, {}).get('review_status') == 'confirmed'
-                     or states.get(k, {}).get('status') == 'confirmed')
+    return {k: v if states.get(k, {}).get('review_status') == 'confirmed'
             and states[k].get('reviewed_value') == str(v or '').strip() else '' for k, v in values.items()}
 

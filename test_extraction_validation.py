@@ -114,6 +114,46 @@ class PortFieldValidationTests(unittest.TestCase):
         self.assertFalse(val)
         self.assertIn('Unregistered or unknown field', err)
 
+    def test_wrong_role_quotation_rejected(self):
+        """B/L with Loading: Chattogram, Discharge: Mongla. Reject Chattogram as discharge port evidence."""
+        # Port of Loading quote rejected for bl_port_of_discharge
+        val_load, err_load = validate_value(
+            'bl_port_of_discharge',
+            'Chattogram',
+            'Port of Loading: Chattogram Sea Port, Bangladesh'
+        )
+        self.assertFalse(val_load)
+        self.assertIn('Port of Loading context', err_load)
+
+        # Multi-role quote where Chattogram is under Port of Loading
+        multi_quote = 'Port of Loading: Chattogram Sea Port | Port of Discharge: Mongla Port'
+        val_cgp, err_cgp = validate_value('bl_port_of_discharge', 'Chattogram Sea Port', multi_quote)
+        self.assertFalse(val_cgp)
+        self.assertIn('conflicting role label', err_cgp)
+
+        # Mongla is under Port of Discharge in same multi_quote -> accepted
+        val_mgl, err_mgl = validate_value('bl_port_of_discharge', 'Mongla Port', multi_quote)
+        self.assertEqual(val_mgl, 'Mongla Port')
+        self.assertEqual(err_mgl, '')
+
+        # Tag 44E quote rejected for lc_port_of_discharge
+        val_lc, err_lc = validate_value(
+            'lc_port_of_discharge',
+            'Busan',
+            ':44E: Port of Loading: Busan, South Korea'
+        )
+        self.assertFalse(val_lc)
+        self.assertIn('Port of Loading context', err_lc)
+
+        # Place of Delivery quote rejected for bl_port_of_discharge
+        val_del, err_del = validate_value(
+            'bl_port_of_discharge',
+            'Dhaka',
+            'Place of Delivery: Dhaka, Bangladesh'
+        )
+        self.assertFalse(val_del)
+        self.assertIn('Place of Delivery context', err_del)
+
 
 class ExtractionIntegrationTests(unittest.TestCase):
     def test_wrong_date_is_omitted_while_valid_amount_survives(self):
