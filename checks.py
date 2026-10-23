@@ -258,6 +258,153 @@ def check_port_of_discharge(d: dict, field_states: Optional[dict] = None) -> dic
         }
 
 
+def _format_weight_num(val: Decimal) -> str:
+    """Format Decimal for evidence strings: integer if integral, otherwise normalized decimal string."""
+    if val == val.to_integral():
+        return str(val.quantize(Decimal('1')))
+    normalized = val.normalize()
+    s = str(normalized)
+    if 'E' in s or 'e' in s:
+        return f"{val:.10f}".rstrip('0').rstrip('.')
+    return s
+
+
+WEIGHT_UNIT_MULTIPLIERS = {
+    'KG': Decimal('1'),
+    'KGS': Decimal('1'),
+    'KILOGRAM': Decimal('1'),
+    'KILOGRAMS': Decimal('1'),
+    'MT': Decimal('1000'),
+    'M/T': Decimal('1000'),
+    'METRIC TON': Decimal('1000'),
+    'METRIC TONS': Decimal('1000'),
+}
+
+
+def check_cargo_gross_weight(
+    d: dict,
+    field_states: Optional[dict] = None,
+    max_weight_delta_kg: Decimal = Decimal('10')
+) -> dict:
+    """Deterministic check: Cargo gross weight consistency.
+
+    Compares pl_cargo_gross_weight (and unit) with bl_cargo_gross_weight (and unit).
+    Applies Decimal arithmetic and unit conversion to KG.
+    Evaluates against configurable review tolerance (default <= 10 KG) with demo disclaimer.
+    Tri-state outcome: Passed, Review required, Insufficient data.
+    """
+    rule = 'Cargo gross weight consistency'
+
+    # Strict Governance & Human Review Contract
+    if field_states is not None:
+        unconfirmed = []
+        for key, name in [
+            ('pl_cargo_gross_weight', 'Packing List gross weight'),
+            ('bl_cargo_gross_weight', 'Bill of Lading gross weight'),
+        ]:
+            st_dict = field_states.get(key, {})
+            if st_dict.get('review_status') != 'confirmed':
+                status_desc = st_dict.get('review_status') or st_dict.get('status') or 'missing'
+                unconfirmed.append(f"{name} review: '{status_desc}'")
+
+        for key, name in [
+            ('pl_cargo_gross_weight_unit', 'Packing List gross weight unit'),
+            ('bl_cargo_gross_weight_unit', 'Bill of Lading gross weight unit'),
+        ]:
+            if key in field_states:
+                st_dict = field_states[key]
+                if st_dict.get('review_status') != 'confirmed':
+                    status_desc = st_dict.get('review_status') or st_dict.get('status') or 'missing'
+                    unconfirmed.append(f"{name} review: '{status_desc}'")
+
+        if unconfirmed:
+            return {
+                'check': rule,
+                'status': 'Insufficient data',
+                'evidence': f"Insufficient data: Cargo gross weight unconfirmed or unresolved ({', '.join(unconfirmed)})."
+            }
+
+    # Extract raw values and units
+    pl_val = d.get('pl_cargo_gross_weight')
+    pl_unit = d.get('pl_cargo_gross_weight_unit')
+    bl_val = d.get('bl_cargo_gross_weight')
+    bl_unit = d.get('bl_cargo_gross_weight_unit')
+
+    if pl_val in (None, '') or bl_val in (None, '') or pl_unit in (None, '') or bl_unit in (None, ''):
+        return {
+            'check': rule,
+            'status': 'Insufficient data',
+            'evidence': (
+                f"Insufficient data: Missing cargo gross weight or unit "
+                f"(Packing List: '{pl_val or ''}' '{pl_unit or ''}', "
+                f"Bill of Lading: '{bl_val or ''}' '{bl_unit or ''}')."
+            )
+        }
+
+    pl_raw = str(pl_val).strip()
+    bl_raw = str(bl_val).strip()
+    pl_unit_norm = re.sub(r'\s+', ' ', str(pl_unit).strip().upper())
+    bl_unit_norm = re.sub(r'\s+', ' ', str(bl_unit).strip().upper())
+
+    if pl_unit_norm not in WEIGHT_UNIT_MULTIPLIERS or bl_unit_norm not in WEIGHT_UNIT_MULTIPLIERS:
+        return {
+            'check': rule,
+            'status': 'Insufficient data',
+            'evidence': (
+                f"Insufficient data: Unsupported weight unit "
+                f"(Packing List: '{pl_unit}', Bill of Lading: '{bl_unit}'). "
+                "Supported units: KG, KGS, MT."
+            )
+        }
+
+    try:
+        pl_amount = Decimal(pl_raw.replace(',', ''))
+        bl_amount = Decimal(bl_raw.replace(',', ''))
+        if pl_amount <= 0 or bl_amount <= 0:
+            return {
+                'check': rule,
+                'status': 'Insufficient data',
+                'evidence': f"Insufficient data: Cargo gross weight must be a positive number (Packing List: '{pl_raw}', Bill of Lading: '{bl_raw}')."
+            }
+    except (InvalidOperation, TypeError, ValueError):
+        return {
+            'check': rule,
+            'status': 'Insufficient data',
+            'evidence': f"Insufficient data: Unreadable cargo gross weight numeric value (Packing List: '{pl_raw}', Bill of Lading: '{bl_raw}')."
+        }
+
+    # Normalization & Conversion to kilograms
+    pl_kg = pl_amount * WEIGHT_UNIT_MULTIPLIERS[pl_unit_norm]
+    bl_kg = bl_amount * WEIGHT_UNIT_MULTIPLIERS[bl_unit_norm]
+    delta_kg = abs(pl_kg - bl_kg)
+
+    tol_str = _format_weight_num(max_weight_delta_kg)
+    pl_kg_str = _format_weight_num(pl_kg)
+    bl_kg_str = _format_weight_num(bl_kg)
+    delta_kg_str = _format_weight_num(delta_kg)
+
+    if delta_kg <= max_weight_delta_kg:
+        return {
+            'check': rule,
+            'status': 'Passed',
+            'evidence': (
+                f"Cargo gross weight harmonized: Packing List ({pl_kg_str} KG) "
+                f"matches Bill of Lading ({bl_kg_str} KG) within demo review tolerance "
+                f"(delta {delta_kg_str} KG <= {tol_str} KG)."
+            )
+        }
+    else:
+        return {
+            'check': rule,
+            'status': 'Review required',
+            'evidence': (
+                f"Discrepancy: Packing List states Cargo Gross Weight as '{pl_raw} {pl_unit}' ({pl_kg_str} KG), "
+                f"whereas Bill of Lading states '{bl_raw} {bl_unit}' ({bl_kg_str} KG) exceeding demo review tolerance "
+                f"(delta {delta_kg_str} KG > {tol_str} KG)."
+            )
+        }
+
+
 def audit(d, field_states=None):
     from field_states import usable_values
     d = usable_values(d, field_states)
@@ -283,5 +430,8 @@ def audit(d, field_states=None):
     except (KeyError,ValueError,TypeError): add('Shipment deadline','Incomplete','Dates must be present in YYYY-MM-DD format')
     # Check 1: Port of discharge consistency
     findings.append(check_port_of_discharge(d, field_states))
+    # Check 2: Cargo gross weight consistency
+    findings.append(check_cargo_gross_weight(d, field_states))
     return findings
+
 

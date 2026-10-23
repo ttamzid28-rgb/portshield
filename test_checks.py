@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import unittest
 import pymupdf
+from decimal import Decimal
 from checks import (
     audit,
     check_port_of_discharge,
+    check_cargo_gross_weight,
     resolve_canonical_port,
     normalize_port_name,
 )
@@ -517,10 +519,290 @@ class TestPortOfDischargeConsistency(unittest.TestCase):
         self.assertEqual(values_dis["bl_port_of_discharge"], "Mongla Port, Bangladesh")
 
 
-class TestAuditPipelineSevenChecks(unittest.TestCase):
-    """Verify live audit execution pipeline runs all 7 deterministic checks."""
+class TestCargoGrossWeightConsistency(unittest.TestCase):
+    """Unit tests for deterministic Cargo Gross Weight consistency check (Check 2)."""
 
-    def test_audit_pipeline_returns_seven_findings_on_complete_clean_data(self):
+    def test_clean_packet_weight_harmonized_passed(self):
+        """Clean packet: 21,600 KG vs 21,600 KG -> Passed (delta 0 KG)."""
+        d = {
+            "pl_cargo_gross_weight": "21600",
+            "pl_cargo_gross_weight_unit": "KGS",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KGS",
+        }
+        res = check_cargo_gross_weight(d)
+        self.assertEqual(res["status"], "Passed")
+        self.assertIn("Cargo gross weight harmonized", res["evidence"])
+        self.assertIn("Packing List (21600 KG) matches Bill of Lading (21600 KG)", res["evidence"])
+        self.assertIn("delta 0 KG <= 10 KG", res["evidence"])
+        self.assertIn("demo review tolerance", res["evidence"])
+
+    def test_discrepancy_packet_weight_evaluation_review_required(self):
+        """Discrepancy packet: 21,600 KG vs 20,700 KG -> Review required (delta 900 KG)."""
+        d = {
+            "pl_cargo_gross_weight": "21600",
+            "pl_cargo_gross_weight_unit": "KGS",
+            "bl_cargo_gross_weight": "20700",
+            "bl_cargo_gross_weight_unit": "KGS",
+        }
+        res = check_cargo_gross_weight(d)
+        self.assertEqual(res["status"], "Review required")
+        self.assertIn("Discrepancy: Packing List states Cargo Gross Weight as '21600 KGS' (21600 KG)", res["evidence"])
+        self.assertIn("Bill of Lading states '20700 KGS' (20700 KG)", res["evidence"])
+        self.assertIn("delta 900 KG > 10 KG", res["evidence"])
+        self.assertIn("demo review tolerance", res["evidence"])
+
+    def test_corrected_packet_weight_harmonized_passed(self):
+        """Corrected packet: 21,600 KG vs 21,600 KG -> Passed (delta 0 KG)."""
+        d = {
+            "pl_cargo_gross_weight": "21600.00",
+            "pl_cargo_gross_weight_unit": "KGS",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        }
+        res = check_cargo_gross_weight(d)
+        self.assertEqual(res["status"], "Passed")
+        self.assertIn("Cargo gross weight harmonized", res["evidence"])
+
+    def test_unit_conversion_mt_to_kg_passed(self):
+        """Unit conversion: 21.6 MT vs 21,600 KG -> Passed (delta 0 KG)."""
+        units_mt = ["MT", "M/T", "METRIC TON", "METRIC TONS"]
+        units_kg = ["KG", "KGS", "KILOGRAM", "KILOGRAMS"]
+        for mt in units_mt:
+            for kg in units_kg:
+                with self.subTest(mt=mt, kg=kg):
+                    d = {
+                        "pl_cargo_gross_weight": "21.6",
+                        "pl_cargo_gross_weight_unit": mt,
+                        "bl_cargo_gross_weight": "21600",
+                        "bl_cargo_gross_weight_unit": kg,
+                    }
+                    res = check_cargo_gross_weight(d)
+                    self.assertEqual(res["status"], "Passed")
+                    self.assertIn("21600 KG", res["evidence"])
+                    self.assertIn("delta 0 KG <= 10 KG", res["evidence"])
+
+    def test_boundary_tolerance_exact_and_exceeded(self):
+        """Boundary tolerance: Exactly 10 KG delta -> Passed; 10.001 / 11 KG delta -> Review required."""
+        # 1. Delta exactly 10 KG (positive)
+        res_10 = check_cargo_gross_weight({
+            "pl_cargo_gross_weight": "21610",
+            "pl_cargo_gross_weight_unit": "KG",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        })
+        self.assertEqual(res_10["status"], "Passed")
+        self.assertIn("delta 10 KG <= 10 KG", res_10["evidence"])
+
+        # 2. Delta exactly 10 KG (negative)
+        res_neg_10 = check_cargo_gross_weight({
+            "pl_cargo_gross_weight": "21590",
+            "pl_cargo_gross_weight_unit": "KG",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        })
+        self.assertEqual(res_neg_10["status"], "Passed")
+        self.assertIn("delta 10 KG <= 10 KG", res_neg_10["evidence"])
+
+        # 3. Delta 10.001 KG -> Review required
+        res_10_001 = check_cargo_gross_weight({
+            "pl_cargo_gross_weight": "21610.001",
+            "pl_cargo_gross_weight_unit": "KG",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        })
+        self.assertEqual(res_10_001["status"], "Review required")
+        self.assertIn("delta 10.001 KG > 10 KG", res_10_001["evidence"])
+
+        # 4. Delta 11 KG -> Review required
+        res_11 = check_cargo_gross_weight({
+            "pl_cargo_gross_weight": "21611",
+            "pl_cargo_gross_weight_unit": "KG",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        })
+        self.assertEqual(res_11["status"], "Review required")
+        self.assertIn("delta 11 KG > 10 KG", res_11["evidence"])
+
+    def test_configurable_tolerance(self):
+        """Custom configurable tolerance parameter operates accurately."""
+        d = {
+            "pl_cargo_gross_weight": "21605",
+            "pl_cargo_gross_weight_unit": "KG",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        }
+        res_passed = check_cargo_gross_weight(d, max_weight_delta_kg=Decimal('5'))
+        self.assertEqual(res_passed["status"], "Passed")
+
+        res_review = check_cargo_gross_weight(d, max_weight_delta_kg=Decimal('4'))
+        self.assertEqual(res_review["status"], "Review required")
+
+    def test_unit_validation_missing_or_unsupported(self):
+        """Missing unit or unsupported unit (e.g. LBS) -> Insufficient data."""
+        # 1. Missing unit
+        res_no_unit = check_cargo_gross_weight({
+            "pl_cargo_gross_weight": "21600",
+            "pl_cargo_gross_weight_unit": "",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        })
+        self.assertEqual(res_no_unit["status"], "Insufficient data")
+        self.assertIn("Missing cargo gross weight or unit", res_no_unit["evidence"])
+
+        # 2. Unsupported unit: LBS
+        res_lbs = check_cargo_gross_weight({
+            "pl_cargo_gross_weight": "47600",
+            "pl_cargo_gross_weight_unit": "LBS",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        })
+        self.assertEqual(res_lbs["status"], "Insufficient data")
+        self.assertIn("Unsupported weight unit", res_lbs["evidence"])
+
+    def test_missing_or_invalid_weight_numeric(self):
+        """Missing, zero, negative, or non-numeric weight values -> Insufficient data."""
+        cases = [
+            {"pl_cargo_gross_weight": "", "pl_cargo_gross_weight_unit": "KG", "bl_cargo_gross_weight": "21600", "bl_cargo_gross_weight_unit": "KG"},
+            {"pl_cargo_gross_weight": "0", "pl_cargo_gross_weight_unit": "KG", "bl_cargo_gross_weight": "21600", "bl_cargo_gross_weight_unit": "KG"},
+            {"pl_cargo_gross_weight": "-100", "pl_cargo_gross_weight_unit": "KG", "bl_cargo_gross_weight": "21600", "bl_cargo_gross_weight_unit": "KG"},
+            {"pl_cargo_gross_weight": "ABC", "pl_cargo_gross_weight_unit": "KG", "bl_cargo_gross_weight": "21600", "bl_cargo_gross_weight_unit": "KG"},
+        ]
+        for c in cases:
+            with self.subTest(c=c):
+                res = check_cargo_gross_weight(c)
+                self.assertEqual(res["status"], "Insufficient data")
+
+    def test_status_string_equality(self):
+        """Confirm plain string equality for cargo gross weight check."""
+        res = check_cargo_gross_weight({
+            "pl_cargo_gross_weight": "21600",
+            "pl_cargo_gross_weight_unit": "KG",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        })
+        self.assertEqual(res["status"], "Passed")
+        self.assertIs(type(res["status"]), str)
+
+    def test_pending_review_bypass_prevention(self):
+        """review_status='pending' cannot evaluate to Passed."""
+        d = {
+            "pl_cargo_gross_weight": "21600",
+            "pl_cargo_gross_weight_unit": "KG",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KG",
+        }
+        states = {
+            "pl_cargo_gross_weight": {"status": "confirmed", "review_status": "pending", "reviewed_value": "21600"},
+            "pl_cargo_gross_weight_unit": {"status": "confirmed", "review_status": "confirmed", "reviewed_value": "KG"},
+            "bl_cargo_gross_weight": {"status": "confirmed", "review_status": "confirmed", "reviewed_value": "21600"},
+            "bl_cargo_gross_weight_unit": {"status": "confirmed", "review_status": "confirmed", "reviewed_value": "KG"},
+        }
+        res = check_cargo_gross_weight(d, states)
+        self.assertEqual(res["status"], "Insufficient data")
+        self.assertIn("Packing List gross weight review: 'pending'", res["evidence"])
+
+    def test_human_confirmed_correction_flow(self):
+        """Initially missing weight field confirmed by human evaluates to Passed."""
+        initial_states = {
+            "pl_cargo_gross_weight": {
+                "status": "missing",
+                "reason": "No value returned; source absence is not established.",
+                "candidates": [],
+                "review_status": "pending",
+            },
+            "pl_cargo_gross_weight_unit": {
+                "status": "missing",
+                "reason": "No value returned",
+                "candidates": [],
+                "review_status": "pending",
+            },
+            "bl_cargo_gross_weight": {
+                "status": "extracted",
+                "reason": "Source-linked candidate",
+                "candidates": [{"value": "21600", "status": "extracted"}],
+                "review_status": "pending",
+            },
+            "bl_cargo_gross_weight_unit": {
+                "status": "extracted",
+                "reason": "Source-linked candidate",
+                "candidates": [{"value": "KGS", "status": "extracted"}],
+                "review_status": "pending",
+            },
+        }
+
+        user_entered_values = {
+            "pl_cargo_gross_weight": "21600",
+            "pl_cargo_gross_weight_unit": "KGS",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KGS",
+        }
+        reviewed = review_fields(user_entered_values, initial_states)
+
+        self.assertEqual(reviewed["pl_cargo_gross_weight"]["status"], "missing")
+        self.assertEqual(reviewed["pl_cargo_gross_weight"]["review_status"], "confirmed")
+        self.assertEqual(reviewed["pl_cargo_gross_weight"]["reviewed_value"], "21600")
+
+        res = check_cargo_gross_weight(user_entered_values, reviewed)
+        self.assertEqual(res["status"], "Passed")
+        self.assertIn("harmonized", res["evidence"].lower())
+
+    def test_wrong_label_rejection_in_validator(self):
+        """Net weight, Tare, and VGM substitute labels rejected during extraction validation."""
+        # 1. Net Weight rejected
+        val_nw, err_nw = validate_value("pl_cargo_gross_weight", "20000", "Cargo Net Weight: 20,000.00 KGS")
+        self.assertFalse(val_nw)
+        self.assertIn("Net Weight context", err_nw)
+
+        # 2. Container Tare rejected
+        val_tare, err_tare = validate_value("pl_cargo_gross_weight", "3800", "Container Tare Weight: 3,800.00 KGS")
+        self.assertFalse(val_tare)
+        self.assertIn("Container Tare", err_tare)
+
+        # 3. Packaging Tare rejected
+        val_pt, err_pt = validate_value("pl_cargo_gross_weight", "1600", "Packaging Tare: 1,600.00 KGS")
+        self.assertFalse(val_pt)
+        self.assertIn("Packaging Tare", err_pt)
+
+        # 4. VGM rejected
+        val_vgm, err_vgm = validate_value("pl_cargo_gross_weight", "25400", "Verified Gross Mass (VGM): 25,400.00 KGS")
+        self.assertFalse(val_vgm)
+        self.assertIn("Verified Gross Mass", err_vgm)
+
+        # 5. Multi-field: Net Weight vs Gross Weight distinction
+        multi_quote = "Net Weight: 20,000.00 KGS | Total Gross Weight: 21,600.00 KGS"
+        val_bad, err_bad = validate_value("pl_cargo_gross_weight", "20000", multi_quote)
+        self.assertFalse(val_bad)
+        self.assertIn("Net Weight substitute", err_bad)
+
+        val_good, err_good = validate_value("pl_cargo_gross_weight", "21600", multi_quote)
+        self.assertEqual(val_good, "21600")
+        self.assertEqual(err_good, "")
+
+        # 6. Candidate preceding Gross Weight label rejected
+        val_pre, err_pre = validate_value("bl_cargo_gross_weight", "21600", "21,600 KGS | Gross Weight: 20,700 KGS")
+        self.assertFalse(val_pre)
+        self.assertIn("appears before the Cargo Gross Weight label", err_pre)
+
+        # 7. Candidate under Gross Weight accepted
+        val_post, err_post = validate_value("bl_cargo_gross_weight", "20700", "21,600 KGS | Gross Weight: 20,700 KGS")
+        self.assertEqual(val_post, "20700")
+        self.assertEqual(err_post, "")
+
+        # 8. Unit validation: supported vs unsupported
+        unit_ok, u_err = validate_value("pl_cargo_gross_weight_unit", "KGS", "Cargo Gross Weight: 21,600.00 KGS")
+        self.assertEqual(unit_ok, "KGS")
+        self.assertEqual(u_err, "")
+
+        unit_lbs, lbs_err = validate_value("pl_cargo_gross_weight_unit", "LBS", "Cargo Gross Weight: 47,600.00 LBS")
+        self.assertFalse(unit_lbs)
+        self.assertIn("Unsupported cargo weight unit: LBS", lbs_err)
+
+
+class TestAuditPipelineEightChecks(unittest.TestCase):
+    """Verify live audit execution pipeline runs all 8 deterministic checks."""
+
+    def test_audit_pipeline_returns_eight_findings_on_complete_clean_data(self):
         clean_input = {
             "lc_currency": "USD",
             "invoice_currency": "USD",
@@ -537,12 +819,17 @@ class TestAuditPipelineSevenChecks(unittest.TestCase):
             "bl_port_of_discharge": "Chattogram Sea Port, Bangladesh",
             "bl_port_of_loading": "Busan, South Korea",
             "bl_place_of_delivery": "Dhaka, Bangladesh",
+            "pl_cargo_gross_weight": "21600",
+            "pl_cargo_gross_weight_unit": "KGS",
+            "bl_cargo_gross_weight": "21600",
+            "bl_cargo_gross_weight_unit": "KGS",
         }
         findings = audit(clean_input)
-        self.assertEqual(len(findings), 7, f"Audit must return exactly 7 findings, got {len(findings)}")
+        self.assertEqual(len(findings), 8, f"Audit must return exactly 8 findings, got {len(findings)}")
 
         checks = [f["check"] for f in findings]
         self.assertIn("Port of discharge consistency", checks)
+        self.assertIn("Cargo gross weight consistency", checks)
 
         for finding in findings:
             self.assertEqual(finding["status"], "Passed", f"Check {finding['check']} failed: {finding['evidence']}")
@@ -550,3 +837,4 @@ class TestAuditPipelineSevenChecks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

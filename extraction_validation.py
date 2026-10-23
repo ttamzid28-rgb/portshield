@@ -125,6 +125,8 @@ REGISTERED_NUMERIC_KEYS = {
     'ci_cargo_net_weight',
 }
 REGISTERED_DATE_KEYS = {'latest_shipment_date', 'lc_latest_shipment_date', 'on_board_date', 'bl_on_board_date'}
+REGISTERED_WEIGHT_AMOUNT_KEYS = {'pl_cargo_gross_weight', 'bl_cargo_gross_weight'}
+REGISTERED_WEIGHT_UNIT_KEYS = {'pl_cargo_gross_weight_unit', 'bl_cargo_gross_weight_unit'}
 
 
 def verify_quote_in_page_text(quote: str, page_text: str) -> bool:
@@ -339,6 +341,193 @@ def check_port_quote_role(key: str, value: str, quote: str) -> tuple[bool, str]:
     return False, f'Candidate value in quotation is outside the {target_label} value span.'
 
 
+GROSS_WEIGHT_ROLE_PATTERNS = (
+    r'\bcargo\s+gross\s+weight\b',
+    r'\btotal\s+gross\s+weight\b',
+    r'\bgross\s+weight\b',
+    r'\bgr\.?\s*wt\.?\b',
+    r'\bg\.?\s*w\.?\b',
+)
+
+NET_WEIGHT_ROLE_PATTERNS = (
+    r'\bcargo\s+net\s+weight\b',
+    r'\btotal\s+net\s+weight\b',
+    r'\bnet\s+weight\b',
+    r'\bnet\s+wt\.?\b',
+    r'\bn\.?\s*w\.?\b',
+)
+
+CONTAINER_TARE_ROLE_PATTERNS = (
+    r'\bcontainer\s+tare(?:\s+weight)?\b',
+    r'\btare\s+weight\b',
+    r'\btare\s+wt\.?\b',
+    r'\btare\b',
+)
+
+PACKAGING_TARE_ROLE_PATTERNS = (
+    r'\bpackaging\s+tare\b',
+    r'\bcargo\s+packaging\s+tare\b',
+)
+
+VGM_ROLE_PATTERNS = (
+    r'\bverified\s+gross\s+mass\b',
+    r'\bvgm\b',
+)
+
+OTHER_WEIGHT_FIELD_HEADER_RE = re.compile(
+    r'\b(?:notify\s+party|consignee|shipper|also\s+notify|vessel|voyage|'
+    r'booking\s+(?:number|no)|bill\s+of\s+lading\s+(?:number|no)|'
+    r'container\s+(?:number|no)|seal\s+(?:number|no)|'
+    r'port\s+of\s+(?:discharge|loading)|place\s+of\s+delivery|'
+    r'description\s+of\s+goods|measurement|volume)\s*:', re.I)
+
+
+def parse_weight_headers(text: str) -> list[dict]:
+    """Identify the start and end offsets of all gross weight and substitute weight headers in normalized text."""
+    raw = []
+    for pat in GROSS_WEIGHT_ROLE_PATTERNS:
+        for m in re.finditer(pat, text, re.I):
+            raw.append({'role': 'gross_weight', 'start': m.start(), 'end': m.end()})
+    for pat in NET_WEIGHT_ROLE_PATTERNS:
+        for m in re.finditer(pat, text, re.I):
+            raw.append({'role': 'net_weight', 'start': m.start(), 'end': m.end()})
+    for pat in CONTAINER_TARE_ROLE_PATTERNS:
+        for m in re.finditer(pat, text, re.I):
+            raw.append({'role': 'container_tare', 'start': m.start(), 'end': m.end()})
+    for pat in PACKAGING_TARE_ROLE_PATTERNS:
+        for m in re.finditer(pat, text, re.I):
+            raw.append({'role': 'packaging_tare', 'start': m.start(), 'end': m.end()})
+    for pat in VGM_ROLE_PATTERNS:
+        for m in re.finditer(pat, text, re.I):
+            raw.append({'role': 'vgm', 'start': m.start(), 'end': m.end()})
+
+    raw.sort(key=lambda x: (x['start'], -(x['end'] - x['start'])))
+    filtered = []
+    for m in raw:
+        if not filtered:
+            filtered.append(m)
+            continue
+        if m['start'] < filtered[-1]['end']:
+            continue
+        filtered.append(m)
+    return filtered
+
+
+def compute_weight_spans(text: str) -> list[dict]:
+    """Calculate explicit value spans bounded by subsequent headers, delimiters, or line/column breaks."""
+    headers = parse_weight_headers(text)
+    spans = []
+    for i, h in enumerate(headers):
+        m_sep = re.match(r'[\s:\-=]+', text[h['end']:])
+        span_start = h['end'] + (m_sep.end() if m_sep else 0)
+        span_end = len(text)
+        if i + 1 < len(headers):
+            span_end = min(span_end, headers[i + 1]['start'])
+        m_delim = FIELD_DELIMITER_RE.search(text, span_start, span_end)
+        if m_delim:
+            span_end = min(span_end, m_delim.start())
+        other = OTHER_WEIGHT_FIELD_HEADER_RE.search(text, span_start, span_end)
+        if other:
+            span_end = min(span_end, other.start())
+
+        # If an unrecognized labeled field appears, bound span before it
+        m_labeled = re.search(r'\b[a-zA-Z_]{2,}\s*:\s*', text[span_start:span_end])
+        if m_labeled:
+            span_end = min(span_end, span_start + m_labeled.start())
+
+        while span_start < span_end and text[span_start].isspace():
+            span_start += 1
+        while span_end > span_start and text[span_end - 1].isspace():
+            span_end -= 1
+
+        spans.append({
+            'role': h['role'],
+            'header_start': h['start'],
+            'header_end': h['end'],
+            'span_start': span_start,
+            'span_end': span_end,
+            'span_text': text[span_start:span_end],
+        })
+    return spans
+
+
+def check_gross_weight_quote_role(key: str, value: str, quote: str) -> tuple[bool, str]:
+    """Verify that candidate weight value/unit appears in Gross Weight header context and not under substitute labels."""
+    if not isinstance(value, str) or not isinstance(quote, str):
+        return False, 'Value and source quotation must be text.'
+
+    norm_val = collapse_whitespace(value)
+    norm_quote = collapse_whitespace(quote)
+    if not norm_val or not norm_quote:
+        return False, 'Candidate value or quotation is empty.'
+
+    is_unit = key in REGISTERED_WEIGHT_UNIT_KEYS or key.endswith('_unit')
+    headers = parse_weight_headers(norm_quote)
+    has_gross = any(h['role'] == 'gross_weight' for h in headers)
+
+    if not has_gross:
+        if any(h['role'] == 'net_weight' for h in headers):
+            return False, 'Quotation belongs to Net Weight context, not Cargo Gross Weight.'
+        if any(h['role'] == 'container_tare' for h in headers):
+            return False, 'Quotation belongs to Container Tare / Tare Weight context, not Cargo Gross Weight.'
+        if any(h['role'] == 'packaging_tare' for h in headers):
+            return False, 'Quotation belongs to Packaging Tare context, not Cargo Gross Weight.'
+        if any(h['role'] == 'vgm' for h in headers):
+            return False, 'Quotation belongs to Verified Gross Mass (VGM) context, not Cargo Gross Weight.'
+        return False, 'Quotation lacks the required Cargo Gross Weight label (e.g., Gross Weight, G.W.).'
+
+    val_matches = []
+    if is_unit:
+        val_upper = norm_val.upper()
+        if val_upper in ('KG', 'KGS', 'KILOGRAM', 'KILOGRAMS'):
+            unit_pat = r'(?<!\w)(?:kgs?|kilograms?)(?!\w)'
+        elif val_upper in ('MT', 'M/T', 'METRIC TON', 'METRIC TONS'):
+            unit_pat = r'(?<!\w)(?:mt|m/t|metric\s+tons?)(?!\w)'
+        else:
+            unit_pat = r'(?<!\w)' + re.escape(norm_val.casefold()) + r'(?!\w)'
+        val_matches = [(m.start(), m.end()) for m in re.finditer(unit_pat, norm_quote.casefold())]
+    else:
+        try:
+            target_amt = Decimal(norm_val.replace(',', ''))
+        except (InvalidOperation, TypeError, ValueError):
+            return False, 'Expected an ungrouped plain decimal value.'
+        for m in _NUMBER.finditer(norm_quote):
+            num = _source_number(m.group(0))
+            if num is not None and num == target_amt:
+                val_matches.append((m.start(), m.end()))
+
+    if not val_matches:
+        return False, 'Value is absent from or not contained in source quotation.'
+
+    spans = compute_weight_spans(norm_quote)
+
+    # 1. Check if any occurrence falls strictly within a gross weight span
+    for m_start, m_end in val_matches:
+        for sp in spans:
+            if sp['role'] == 'gross_weight' and sp['span_start'] <= m_start and m_end <= sp['span_end']:
+                return True, ''
+
+    # 2. Check if any occurrence falls within a substitute weight span
+    for m_start, m_end in val_matches:
+        for sp in spans:
+            if sp['role'] != 'gross_weight' and sp['span_start'] <= m_start and m_end <= sp['span_end']:
+                name = {
+                    'net_weight': 'Net Weight',
+                    'container_tare': 'Container Tare / Tare Weight',
+                    'packaging_tare': 'Packaging Tare',
+                    'vgm': 'Verified Gross Mass (VGM)',
+                }.get(sp['role'], 'substitute weight label')
+                return False, f'Candidate value in quotation is qualified by {name} substitute.'
+
+    # 3. Check if candidate appears strictly before the gross weight header
+    first_gw = min(h['start'] for h in headers if h['role'] == 'gross_weight')
+    if any(m_end <= first_gw for m_start, m_end in val_matches):
+        return False, 'Candidate value in quotation appears before the Cargo Gross Weight label and belongs to preceding context.'
+
+    # 4. Outside gross weight span
+    return False, 'Candidate value in quotation is outside the Cargo Gross Weight value span.'
+
+
 def validate_value(key, value, quote):
     if not all(isinstance(v, str) for v in (key, value, quote)):
         return '', 'Value and source quotation must be text.'
@@ -360,8 +549,24 @@ def validate_value(key, value, quote):
         if amount<=0:return '', 'Expected a positive finite number.'
         if not any(number==amount for number in _quoted_numbers(quote)):
             return '', 'Numeric value is absent or its source formatting is ambiguous; manual review required.'
+        if key in REGISTERED_WEIGHT_AMOUNT_KEYS:
+            ok, role_err = check_gross_weight_quote_role(key, value, quote)
+            if not ok:
+                return '', role_err
         if key.endswith('_quantity') and re.search(r'number of (bags|packages|cartons)|packaging',quote,re.I) and not re.search(r'quantity',quote,re.I):
             return '', 'Package count or packaging specification needs separate quantity/unit review.'
+    elif key in REGISTERED_WEIGHT_UNIT_KEYS:
+        val_clean = collapse_whitespace(value).upper()
+        norm_quote = collapse_whitespace(quote)
+        supported = {'KG', 'KGS', 'KILOGRAM', 'KILOGRAMS', 'MT', 'M/T', 'METRIC TON', 'METRIC TONS'}
+        if val_clean not in supported:
+            return '', f'Unsupported cargo weight unit: {val_clean}'
+        if not val_clean:
+            return '', 'Unit value is empty.'
+        ok, role_err = check_gross_weight_quote_role(key, val_clean, norm_quote)
+        if not ok:
+            return '', role_err
+        return val_clean, ''
     elif key in REGISTERED_DATE_KEYS:
         if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value):
             return '', 'Expected a full ISO date (YYYY-MM-DD).'
@@ -390,3 +595,4 @@ def validate_value(key, value, quote):
     else:
         return '', f'Unregistered or unknown field: {key}'
     return value,''
+

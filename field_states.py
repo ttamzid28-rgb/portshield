@@ -54,7 +54,7 @@ def collect_fields(entries, field_names, packet, page_text):
     for key, record in states.items():
         candidates = record['candidates']
         valid = {c['validated_value'] for c in candidates if c['status'] == 'extracted'}
-        comparable = {Decimal(v) for v in valid} if key in {'invoice_total','lc_amount','invoice_quantity','packing_quantity','unit_price'} else valid
+        comparable = {Decimal(v) for v in valid} if key in {'invoice_total','lc_amount','invoice_quantity','packing_quantity','unit_price','pl_cargo_gross_weight','bl_cargo_gross_weight'} else valid
         if len(comparable) > 1:record.update(status='conflicting', reason='Multiple validated values; source review required.')
         elif any(c['status'] == 'rejected' for c in candidates):record.update(status='rejected', reason='At least one candidate failed validation; inspect candidate reasons.')
         elif any(c['status'] == 'unreadable' for c in candidates):record.update(status='unreadable', reason='Source text cannot independently verify a candidate.')

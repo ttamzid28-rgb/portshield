@@ -51,7 +51,7 @@ class SourceBoundaryTests(unittest.TestCase):
                 self.assertEqual(evidence['_field_states']['bl_port_of_discharge']['status'], 'rejected')
                 values['lc_port_of_discharge'] = 'Chattogram'
                 reviewed = review_fields(values, evidence['_field_states'])
-                finding = audit(values, reviewed)[-1]
+                finding = next(f for f in audit(values, reviewed) if f['check'] == 'Port of discharge consistency')
                 self.assertEqual(finding['status'], 'Insufficient data')
 
     def test_wrapped_and_bounded_real_ports_remain_usable(self):
@@ -65,9 +65,67 @@ class SourceBoundaryTests(unittest.TestCase):
                 self.assertEqual(values['bl_port_of_discharge'], value)
                 values['lc_port_of_discharge'] = 'Chattogram'
                 reviewed = review_fields(values, evidence['_field_states'])
-                self.assertEqual(audit(values, reviewed)[-1]['status'],
+                finding = next(f for f in audit(values, reviewed) if f['check'] == 'Port of discharge consistency')
+                self.assertEqual(finding['status'],
                                  'Passed' if value.startswith('Chattogram') else 'Review required')
+
+    def test_false_gross_weight_substitutes_cannot_reach_audit(self):
+        cases = [
+            ('pl_cargo_gross_weight', '20000', 'Cargo Net Weight: 20,000 KGS'),
+            ('pl_cargo_gross_weight', '20000', 'Total Net Weight: 20,000 KGS'),
+            ('pl_cargo_gross_weight', '20000', 'Net Weight: 20,000 KGS'),
+            ('pl_cargo_gross_weight', '20000', 'Net Wt: 20,000 KGS'),
+            ('pl_cargo_gross_weight', '20000', 'N.W.: 20,000 KGS'),
+            ('pl_cargo_gross_weight', '3800', 'Container Tare Weight: 3,800 KGS'),
+            ('pl_cargo_gross_weight', '3800', 'Tare Weight: 3,800 KGS'),
+            ('pl_cargo_gross_weight', '3800', 'Tare Wt: 3,800 KGS'),
+            ('pl_cargo_gross_weight', '3800', 'Tare: 3,800 KGS'),
+            ('pl_cargo_gross_weight', '1600', 'Packaging Tare: 1,600 KGS'),
+            ('pl_cargo_gross_weight', '1600', 'Cargo Packaging Tare: 1,600 KGS'),
+            ('pl_cargo_gross_weight', '25400', 'Verified Gross Mass: 25,400 KGS'),
+            ('pl_cargo_gross_weight', '25400', 'VGM: 25,400 KGS'),
+            ('pl_cargo_gross_weight', '20000', 'Net Weight: 20,000 KGS | Gross Weight: 21,600 KGS'),
+            ('bl_cargo_gross_weight', '21600', '21,600 KGS | Gross Weight: 20,700 KGS'),
+        ]
+        for field, value, quote in cases:
+            with self.subTest(field=field, quote=quote):
+                values, evidence = self.collect(field, value, quote)
+                self.assertEqual(values[field], '')
+                self.assertEqual(evidence['_field_states'][field]['status'], 'rejected')
+                values['pl_cargo_gross_weight_unit'] = 'KG'
+                values['bl_cargo_gross_weight_unit'] = 'KG'
+                other_field = 'bl_cargo_gross_weight' if field == 'pl_cargo_gross_weight' else 'pl_cargo_gross_weight'
+                values[other_field] = '21600'
+                values[field] = ''
+                reviewed = review_fields(values, evidence['_field_states'])
+                finding = next(f for f in audit(values, reviewed) if f['check'] == 'Cargo gross weight consistency')
+                self.assertEqual(finding['status'], 'Insufficient data')
+
+    def test_wrapped_and_bounded_gross_weight_remains_usable(self):
+        cases = [
+            ('pl_cargo_gross_weight', '21600', 'Cargo Gross Weight: 21,600.00 KGS'),
+            ('pl_cargo_gross_weight', '21600', 'Total Gross Weight:\n21,600 KGS'),
+            ('pl_cargo_gross_weight', '21600', 'Gross Weight: 21,600 KGS'),
+            ('pl_cargo_gross_weight', '21600', 'GR.WT.: 21,600 KGS'),
+            ('pl_cargo_gross_weight', '21600', 'G.W.: 21,600 KGS'),
+            ('bl_cargo_gross_weight', '21600', 'Net Weight: 20,000 KGS | Gross Weight: 21,600 KGS'),
+            ('bl_cargo_gross_weight', '20700', '21,600 KGS | Gross Weight: 20,700 KGS'),
+        ]
+        for field, value, quote in cases:
+            with self.subTest(field=field, quote=quote):
+                values, evidence = self.collect(field, value, quote)
+                self.assertEqual(values[field], value)
+                self.assertEqual(evidence['_field_states'][field]['status'], 'extracted')
+                values['pl_cargo_gross_weight'] = '21600'
+                values['pl_cargo_gross_weight_unit'] = 'KG'
+                values['bl_cargo_gross_weight'] = value if field == 'bl_cargo_gross_weight' else '21600'
+                values['bl_cargo_gross_weight_unit'] = 'KG'
+                reviewed = review_fields(values, evidence['_field_states'])
+                finding = next(f for f in audit(values, reviewed) if f['check'] == 'Cargo gross weight consistency')
+                self.assertEqual(finding['status'],
+                                 'Passed' if values['bl_cargo_gross_weight'] == '21600' else 'Review required')
 
 
 if __name__ == '__main__':
     unittest.main()
+
