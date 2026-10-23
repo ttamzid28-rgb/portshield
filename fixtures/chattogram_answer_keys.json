@@ -46,7 +46,11 @@
       "lc_amount": "lc_amount",
       "lc_currency": "lc_currency",
       "lc_latest_shipment_date": "latest_shipment_date",
-      "bl_on_board_date": "on_board_date"
+      "bl_on_board_date": "on_board_date",
+      "lc_port_of_discharge": "lc_port_of_discharge",
+      "bl_port_of_discharge": "bl_port_of_discharge",
+      "bl_port_of_loading": "bl_port_of_loading",
+      "bl_place_of_delivery": "bl_place_of_delivery"
     },
     "weight_tolerance_policy": {
       "max_weight_delta_kg": 10.0,

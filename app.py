@@ -17,10 +17,10 @@ st.markdown("""<style>
 .stagebar{padding:12px 16px;background:#e5f3f1;border:1px solid #c5e3df;border-radius:8px;color:#146c63;margin-bottom:18px}
 </style>""",unsafe_allow_html=True)
 st.markdown('<div class="hero"><div class="eyebrow">PORTSHIELD AI / IMPORT OPERATIONS</div><h1>Trade document review workbench</h1><p>Find conflicts. Review the evidence. Prepare corrections before submission.</p></div>',unsafe_allow_html=True)
-st.caption('LIVE PROTOTYPE v0.9 · Six deterministic checks · Gemini PDF and OpenRouter text AI options')
-fields=['lc_currency','lc_amount','latest_shipment_date','invoice_currency','invoice_total','invoice_quantity','unit_price','packing_quantity','packing_container','bl_container','on_board_date']
-base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'ABCD1234567','bl_container':'ABCD1234568','on_board_date':'2026-10-21'}
-fixed={**base,'invoice_total':'25000','bl_container':'ABCD1234567'}
+st.caption('LIVE PROTOTYPE v0.9 · Seven deterministic checks · Gemini PDF and OpenRouter text AI options')
+fields=['lc_currency','lc_amount','latest_shipment_date','lc_port_of_discharge','invoice_currency','invoice_total','invoice_quantity','unit_price','packing_quantity','packing_container','bl_container','on_board_date','bl_port_of_discharge']
+base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','lc_port_of_discharge':'Chattogram Sea Port','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'ABCD1234567','bl_container':'ABCD1234568','on_board_date':'2026-10-21','bl_port_of_discharge':'Mongla Port'}
+fixed={**base,'invoice_total':'25000','bl_container':'ABCD1234567','bl_port_of_discharge':'Chattogram Sea Port'}
 with st.sidebar:
     st.title('PortShield AI')
     st.caption('COMMERCIAL DESK')
@@ -29,7 +29,9 @@ with st.sidebar:
     scenario=st.selectbox('Sample packet',['Problem shipment','Corrected shipment','Unreadable field'])
     if st.button('Load sample',type='primary') or 'fields' not in st.session_state:
         sample=dict(fixed if scenario=='Corrected shipment' else base)
-        if scenario=='Unreadable field':sample['invoice_total']=''
+        if scenario=='Unreadable field':
+            sample['invoice_total']=''
+            sample['bl_port_of_discharge']=''
         st.session_state.previous=st.session_state.pop('results',st.session_state.get('previous',[]))
         st.session_state.ai_pending=False;st.session_state.fields=sample;st.session_state.evidence={k:f'Fictional sample field: {k} = {v}' for k,v in sample.items()}
         st.session_state.bound_packet=None
@@ -55,13 +57,14 @@ with overview:
         {'Field':'Quantity (equivalent units)','L/C':'—','Invoice':v('invoice_quantity'),'Packing list':v('packing_quantity'),'B/L':'—'},
         {'Field':'Container','L/C':'—','Invoice':'—','Packing list':v('packing_container'),'B/L':v('bl_container')},
         {'Field':'Shipment date / deadline','L/C':v('latest_shipment_date'),'Invoice':'—','Packing list':'—','B/L':v('on_board_date')},
+        {'Field':'Port of discharge','L/C':v('lc_port_of_discharge'),'Invoice':'—','Packing list':'—','B/L':v('bl_port_of_discharge')},
     ]
     st.dataframe(rows,hide_index=True,use_container_width=True)
     st.caption('Matrix reflects loaded or confirmed fields. Confirm source values in Review & evidence before relying on a result.')
     st.subheader('Exception queue')
     pending=[r for r in current if r['status']!='Passed']
     if pending:st.dataframe(pending,hide_index=True,use_container_width=True)
-    else:st.success('No issues detected in the six supported checks. Human review remains required.')
+    else:st.success('No issues detected in the seven supported checks. Human review remains required.')
     st.info('Start with the sample packet, or upload the supplied PDFs in Document intake. Change confirmed values, run checks, then open Corrections & report.')
 with upload:
     st.subheader('Upload a document packet')
@@ -222,7 +225,7 @@ with review:
                 st.write(result['evidence']);st.caption('Evidence refers to confirmed values; edits require reviewer verification against the source.')
         with st.expander('Source extraction evidence'):
             render_source_evidence(st.session_state.evidence)
-        report={'prototype':'PortShield v0.9','scope':'Six limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
+        report={'prototype':'PortShield v0.9','scope':'Seven limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
         st.download_button('Download review report (JSON)',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with actions:
     st.subheader('Correction desk')
@@ -237,12 +240,13 @@ with actions:
             'Invoice amount within configured limit':('Commercial officer / bank','Confirm the configured limit, applicable tolerance and credit utilisation. Seek bank guidance on the appropriate correction, waiver or amendment path.'),
             'Invoice arithmetic':('Commercial officer / supplier','Reconcile quantity multiplied by unit price against the invoice total, including any legitimate adjustments not modelled by this prototype.'),
             'Shipment deadline':('Commercial officer / bank','Verify the actual on-board date and latest shipment date. Escalate for specialist review; do not alter an actual shipment date to remove a flag.'),
+            'Port of discharge consistency':('Commercial officer / carrier / bank','Reconcile Port of Discharge on the Bill of Lading with Letter of Credit Field 44F. If the vessel discharged at an alternate port, obtain a credit amendment or revised Bill of Lading before document submission.'),
         }
         lines=['PORTSHIELD | OFFICER REVIEW DRAFT','Fictional demo shipment PS-DEMO-001','']
         for r in st.session_state.results:
             if r['status']=='Passed':continue
             owner,action=recommendations[r['check']]
-            if r['status']=='Incomplete':action='Obtain readable source information and confirm missing values before completing this check.'
+            if r['status'] in ('Incomplete', 'Insufficient data'):action='Obtain readable source information and confirm missing values before completing this check.'
             with st.expander(r['status']+' | '+r['check'],expanded=True):
                 st.write('**Suggested owner:** '+owner)
                 st.write('**Evidence:** '+r['evidence'])
@@ -250,11 +254,11 @@ with actions:
             lines.extend([r['check'],r['evidence'],'Suggested owner: '+owner,'Requested action: '+action,''])
         draft='Subject: Document review - please confirm outstanding items\n\nPlease review the items below against the actual shipment and credit terms. Confirm the appropriate correction or escalation before final submission.\n\n'+'\n'.join(lines)
         st.download_button('Download correction-request draft',draft,'portshield-correction-request.txt','text/plain')
-        report={'prototype':'PortShield v0.9','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Six limited checks; human approval required'}
+        report={'prototype':'PortShield v0.9','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Seven limited checks; human approval required'}
         st.download_button('Download full review data',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with about:
     st.subheader('Working today')
-    st.write('Gemini PDF extraction and OpenRouter free text AI (provider API key required; review mandatory) • sample PDF upload • labelled text extraction • editable fields • six deterministic checks • source text evidence • comparison with previous review • downloadable JSON report')
+    st.write('Gemini PDF extraction and OpenRouter free text AI (provider API key required; review mandatory) • sample PDF upload • labelled text extraction • editable fields • seven deterministic checks • source text evidence • comparison with previous review • downloadable JSON report')
     st.subheader('Next milestones')
     st.write('Benchmark AI extraction on real layouts; PDF evidence viewer; versioned correction uploads; expert-reviewed rules and evaluation dataset.')
     st.caption('No financial savings, accuracy percentage or regulatory certification is claimed. Uploaded files are processed in the app session; do not upload confidential trade documents to this public prototype.')

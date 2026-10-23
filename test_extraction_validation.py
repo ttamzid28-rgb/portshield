@@ -77,6 +77,44 @@ class DateAndNumberTests(unittest.TestCase):
         self.assertNotEqual(normalized('Total 18 000'), normalized('Total 18\n000'))
         self.assertEqual(normalized('Total 18\u00a0000'), normalized('Total 18 000'))
 
+
+class PortFieldValidationTests(unittest.TestCase):
+    def test_valid_ports_contained_in_quote(self):
+        self.assertEqual(
+            validate_value('lc_port_of_discharge', 'Chattogram Sea Port', '44F: Port of Discharge: Chattogram Sea Port, Bangladesh')[0],
+            'Chattogram Sea Port'
+        )
+        self.assertEqual(
+            validate_value('bl_port_of_discharge', 'BDCGP', 'Port of Discharge: BDCGP')[0],
+            'BDCGP'
+        )
+        self.assertEqual(
+            validate_value('bl_port_of_loading', 'Busan, South Korea', 'Port of Loading: Busan, South Korea')[0],
+            'Busan, South Korea'
+        )
+        self.assertEqual(
+            validate_value('bl_place_of_delivery', 'Dhaka, Bangladesh', 'Place of Delivery: Dhaka, Bangladesh')[0],
+            'Dhaka, Bangladesh'
+        )
+
+    def test_quotation_containment_rejection(self):
+        val, err = validate_value('lc_port_of_discharge', 'Mongla Port', '44F: Port of Discharge: Chattogram Sea Port, Bangladesh')
+        self.assertFalse(val)
+        self.assertIn('absent from or not contained', err)
+
+    def test_length_boundaries_rejected(self):
+        # Too short (< 3 chars)
+        self.assertFalse(validate_value('lc_port_of_discharge', 'GP', 'Port GP')[0])
+        # Too long (> 120 chars)
+        long_port = 'A' * 121
+        self.assertFalse(validate_value('lc_port_of_discharge', long_port, long_port)[0])
+
+    def test_unregistered_unknown_field_rejected(self):
+        val, err = validate_value('unregistered_unknown_field', 'Some Value', 'Quote Some Value')
+        self.assertFalse(val)
+        self.assertIn('Unregistered or unknown field', err)
+
+
 class ExtractionIntegrationTests(unittest.TestCase):
     def test_wrong_date_is_omitted_while_valid_amount_survives(self):
         import base64, io, json, zipfile
