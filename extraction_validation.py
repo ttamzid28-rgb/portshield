@@ -370,6 +370,7 @@ PACKAGING_TARE_ROLE_PATTERNS = (
 )
 
 VGM_ROLE_PATTERNS = (
+    r'\bcontainer\s+gross\s+(?:weight|mass)\b',
     r'\bverified\s+gross\s+mass\b',
     r'\bvgm\b',
 )
@@ -418,7 +419,7 @@ def compute_weight_spans(text: str) -> list[dict]:
     headers = parse_weight_headers(text)
     spans = []
     for i, h in enumerate(headers):
-        m_sep = re.match(r'[\s:\-=]+', text[h['end']:])
+        m_sep = re.match(r'[\s.:\-=]+', text[h['end']:])
         span_start = h['end'] + (m_sep.end() if m_sep else 0)
         span_end = len(text)
         if i + 1 < len(headers):
@@ -457,7 +458,7 @@ def check_gross_weight_quote_role(key: str, value: str, quote: str) -> tuple[boo
         return False, 'Value and source quotation must be text.'
 
     norm_val = collapse_whitespace(value)
-    norm_quote = collapse_whitespace(quote)
+    norm_quote = normalized(quote)
     if not norm_val or not norm_quote:
         return False, 'Candidate value or quotation is empty.'
 
@@ -528,6 +529,45 @@ def check_gross_weight_quote_role(key: str, value: str, quote: str) -> tuple[boo
     return False, 'Candidate value in quotation is outside the Cargo Gross Weight value span.'
 
 
+
+WEIGHT_UNIT_ALIASES = {
+    'KG': 'KG', 'KGS': 'KG', 'KILOGRAM': 'KG', 'KILOGRAMS': 'KG',
+    'MT': 'MT', 'M/T': 'MT', 'METRIC TON': 'MT', 'METRIC TONS': 'MT',
+}
+
+
+def gross_weight_pair(quote):
+    """Return one source amount/unit pair; offsets refer to normalized quotation."""
+    text = normalized(quote)
+    spans = [s for s in compute_weight_spans(text) if s['role'] == 'gross_weight']
+    if len(spans) != 1:
+        return None
+    span = spans[0]
+    # Full match prevents borrowing numbers/units from neighbouring content.
+    match = re.fullmatch(
+        r'([0-9][0-9., \u00a0\u202f]*?)[ \t\r\n]+'
+        r'(kgs?|kilograms?|mt|m/t|metric[ ]+tons?)', span['span_text'], re.I)
+    if not match:
+        return None
+    amount = _source_number(match[1])
+    if amount is None or amount <= 0:
+        return None
+    unit = WEIGHT_UNIT_ALIASES[match[2].upper()]
+    return {'amount': str(amount), 'unit': unit,
+            'span': [span['span_start'], span['span_end']], 'quote': text}
+
+
+def bounded_weight_decimal(value, allow_zero=False):
+    """Bound arithmetic precision and reject ambiguous manual number formats."""
+    text = str(value).strip()
+    if not re.fullmatch(r'[0-9]{1,18}(?:\.[0-9]{1,6})?', text):
+        raise ValueError('Use a plain decimal without grouping or exponent notation.')
+    number = Decimal(text)
+    if not number.is_finite() or number < 0 or (not allow_zero and number == 0):
+        raise ValueError('Expected a positive finite weight.')
+    return number
+
+
 def validate_value(key, value, quote):
     if not all(isinstance(v, str) for v in (key, value, quote)):
         return '', 'Value and source quotation must be text.'
@@ -550,14 +590,21 @@ def validate_value(key, value, quote):
         if not any(number==amount for number in _quoted_numbers(quote)):
             return '', 'Numeric value is absent or its source formatting is ambiguous; manual review required.'
         if key in REGISTERED_WEIGHT_AMOUNT_KEYS:
+            try:
+                bounded_weight_decimal(value)
+            except ValueError as exc:
+                return '', str(exc)
             ok, role_err = check_gross_weight_quote_role(key, value, quote)
             if not ok:
                 return '', role_err
+            pair = gross_weight_pair(quote)
+            if pair is None or Decimal(pair['amount']) != amount:
+                return '', 'Cargo gross weight needs one unambiguous amount/unit source pair.'
         if key.endswith('_quantity') and re.search(r'number of (bags|packages|cartons)|packaging',quote,re.I) and not re.search(r'quantity',quote,re.I):
             return '', 'Package count or packaging specification needs separate quantity/unit review.'
     elif key in REGISTERED_WEIGHT_UNIT_KEYS:
         val_clean = collapse_whitespace(value).upper()
-        norm_quote = collapse_whitespace(quote)
+        norm_quote = normalized(quote)
         supported = {'KG', 'KGS', 'KILOGRAM', 'KILOGRAMS', 'MT', 'M/T', 'METRIC TON', 'METRIC TONS'}
         if val_clean not in supported:
             return '', f'Unsupported cargo weight unit: {val_clean}'
@@ -566,6 +613,9 @@ def validate_value(key, value, quote):
         ok, role_err = check_gross_weight_quote_role(key, val_clean, norm_quote)
         if not ok:
             return '', role_err
+        pair = gross_weight_pair(quote)
+        if pair is None or pair['unit'] != WEIGHT_UNIT_ALIASES[val_clean]:
+            return '', 'Cargo gross weight needs one unambiguous amount/unit source pair.'
         return val_clean, ''
     elif key in REGISTERED_DATE_KEYS:
         if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value):

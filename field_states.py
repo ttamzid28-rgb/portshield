@@ -50,6 +50,31 @@ def collect_fields(entries, field_names, packet, page_text):
         if reason:evidence['_rejected'] = evidence.get('_rejected', '') + f' {key}: {reason}'
         if type(doc) is int and 1 <= doc <= len(packet):
             evidence[key] = evidence.get(key, '') + f'\n{packet[doc-1][0]} · page {page} · AI-cited text (verify): {str(quote)[:1000]}'
+    # Bind paired fields to the same validated source entry, never just matching numbers.
+    from extraction_validation import gross_weight_pair
+    for prefix in ('pl', 'bl'):
+        amount_key = prefix + '_cargo_gross_weight'
+        unit_key = amount_key + '_unit'
+        if amount_key not in states or unit_key not in states:
+            continue
+        groups = []
+        for key in (amount_key, unit_key):
+            candidates = states[key]['candidates']
+            for candidate in candidates:
+                if candidate['status'] == 'extracted':
+                    pair = gross_weight_pair(candidate['quote'])
+                    candidate['weight_source'] = {
+                        **pair, 'document': candidate['document'], 'page': candidate['page']}
+            groups.append(candidates)
+        for candidates, partners in (groups, groups[::-1]):
+            for candidate in candidates:
+                if candidate['status'] != 'extracted':
+                    continue
+                if not any(p.get('weight_source') == candidate['weight_source']
+                           and p['status'] == 'extracted' for p in partners):
+                    candidate.update(status='rejected', validated_value='',
+                                     reason='Weight amount and unit do not share a verified source entry.')
+                    evidence['_rejected'] = evidence.get('_rejected', '') + ' ' + candidate['reason']
     values = {}
     for key, record in states.items():
         candidates = record['candidates']

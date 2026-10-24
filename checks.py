@@ -358,8 +358,10 @@ def check_cargo_gross_weight(
         }
 
     try:
-        pl_amount = Decimal(pl_raw.replace(',', ''))
-        bl_amount = Decimal(bl_raw.replace(',', ''))
+        from extraction_validation import bounded_weight_decimal
+        pl_amount = bounded_weight_decimal(pl_raw)
+        bl_amount = bounded_weight_decimal(bl_raw)
+        max_weight_delta_kg = bounded_weight_decimal(max_weight_delta_kg, allow_zero=True)
         if pl_amount <= 0 or bl_amount <= 0:
             return {
                 'check': rule,
