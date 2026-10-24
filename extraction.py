@@ -44,6 +44,14 @@ explicit. lc_amount is face credit amount, not remaining balance or tolerance-ad
 latest_shipment_date is NOT credit expiry. unit_price is invoice unit price. This prototype
 supports only a single line item and single container; omit related quantity/price/container
 fields if multiple or ambiguous. Do not sum or choose a representative item.
+CARGO GROSS WEIGHT: pl_cargo_gross_weight and its _unit come only from the Packing List;
+bl_cargo_gross_weight and its _unit come only from the Bill of Lading. Cargo gross weight
+includes cargo packaging but excludes the container itself. Never substitute net weight,
+packaging tare, container tare, container gross weight or VGM. Extract amount and unit
+from ONE explicitly labelled cargo gross weight entry. Cite the SAME complete label,
+amount and unit quotation, document and page for both fields. Support KG/KGS or MT;
+do not convert the amount, infer a missing unit, or combine separate entries. If multiple
+entries or the amount/unit association are ambiguous, omit both fields for human review.
 FIELD DEFINITIONS: Read each document heading to identify its type; a cross-reference to
 an invoice does not make a packing list an invoice. lc_* fields come only from the credit;
 invoice_* and unit_price only from the invoice; packing_* only from the packing list;

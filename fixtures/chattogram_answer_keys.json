@@ -50,7 +50,11 @@
       "lc_port_of_discharge": "lc_port_of_discharge",
       "bl_port_of_discharge": "bl_port_of_discharge",
       "bl_port_of_loading": "bl_port_of_loading",
-      "bl_place_of_delivery": "bl_place_of_delivery"
+      "bl_place_of_delivery": "bl_place_of_delivery",
+      "pl_cargo_gross_weight": "pl_cargo_gross_weight",
+      "pl_cargo_gross_weight_unit": "pl_cargo_gross_weight_unit",
+      "bl_cargo_gross_weight": "bl_cargo_gross_weight",
+      "bl_cargo_gross_weight_unit": "bl_cargo_gross_weight_unit"
     },
     "weight_tolerance_policy": {
       "max_weight_delta_kg": 10.0,

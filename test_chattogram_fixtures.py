@@ -78,6 +78,18 @@ def map_canonical_to_engine(fields: dict) -> dict:
         res["bl_port_of_loading"] = fields["bl_port_of_loading"]["value"]
     if "bl_place_of_delivery" in fields:
         res["bl_place_of_delivery"] = fields["bl_place_of_delivery"]["value"]
+    if "pl_cargo_gross_weight" in fields:
+        res["pl_cargo_gross_weight"] = fields["pl_cargo_gross_weight"]["value"]
+    if "pl_cargo_gross_weight_unit" in fields:
+        res["pl_cargo_gross_weight_unit"] = fields["pl_cargo_gross_weight_unit"]["value"]
+    elif "pl_cargo_gross_weight" in fields and "unit" in fields["pl_cargo_gross_weight"]:
+        res["pl_cargo_gross_weight_unit"] = fields["pl_cargo_gross_weight"]["unit"]
+    if "bl_cargo_gross_weight" in fields:
+        res["bl_cargo_gross_weight"] = fields["bl_cargo_gross_weight"]["value"]
+    if "bl_cargo_gross_weight_unit" in fields:
+        res["bl_cargo_gross_weight_unit"] = fields["bl_cargo_gross_weight_unit"]["value"]
+    elif "bl_cargo_gross_weight" in fields and "unit" in fields["bl_cargo_gross_weight"]:
+        res["bl_cargo_gross_weight_unit"] = fields["bl_cargo_gross_weight"]["unit"]
     return res
 
 
@@ -177,7 +189,7 @@ class TestChattogramFixtures(unittest.TestCase):
                 )
 
     def test_behavioral_audit_engine_execution_on_clean_packet(self):
-        """Execute live checks.py:audit() on mapped clean packet values; all 7 checks must return 'Passed'."""
+        """Execute live checks.py:audit() on mapped clean packet values; all 8 checks must return 'Passed'."""
         with open(ANSWER_KEY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -186,7 +198,7 @@ class TestChattogramFixtures(unittest.TestCase):
 
         # Run live audit routine from checks.py
         findings = audit(engine_input)
-        self.assertEqual(len(findings), 7, f"Audit routine must return exactly 7 findings, got {len(findings)}")
+        self.assertEqual(len(findings), 8, f"Audit routine must return exactly 8 findings, got {len(findings)}")
 
         for finding in findings:
             self.assertEqual(
@@ -196,9 +208,12 @@ class TestChattogramFixtures(unittest.TestCase):
             )
         port_check = next(f for f in findings if f["check"] == "Port of discharge consistency")
         self.assertEqual(port_check["status"], "Passed")
+        weight_check = next(f for f in findings if f["check"] == "Cargo gross weight consistency")
+        self.assertEqual(weight_check["status"], "Passed")
+        self.assertIn("harmonized", weight_check["evidence"].lower())
 
     def test_behavioral_audit_engine_execution_on_discrepancy_packet(self):
-        """Execute live checks.py:audit() on discrepancy packet; 6 baseline pass, Check 1 evaluates to 'Review required' (DISC-01)."""
+        """Execute live checks.py:audit() on discrepancy packet; 6 baseline pass, Check 1 and Check 2 evaluate to 'Review required'."""
         with open(ANSWER_KEY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -207,7 +222,7 @@ class TestChattogramFixtures(unittest.TestCase):
 
         # Run live audit routine from checks.py
         findings = audit(engine_input)
-        self.assertEqual(len(findings), 7, f"Audit routine must return exactly 7 findings, got {len(findings)}")
+        self.assertEqual(len(findings), 8, f"Audit routine must return exactly 8 findings, got {len(findings)}")
 
         for finding in findings:
             if finding["check"] == "Port of discharge consistency":
@@ -218,6 +233,15 @@ class TestChattogramFixtures(unittest.TestCase):
                 )
                 self.assertIn("Mongla", finding["evidence"])
                 self.assertIn("Chattogram", finding["evidence"])
+            elif finding["check"] == "Cargo gross weight consistency":
+                self.assertEqual(
+                    finding["status"],
+                    "Review required",
+                    f"Check 2 '{finding['check']}' must flag discrepancy DISC-02: {finding['evidence']}",
+                )
+                self.assertIn("21600", finding["evidence"])
+                self.assertIn("20700", finding["evidence"])
+                self.assertIn("exceeding demo review tolerance", finding["evidence"])
             else:
                 self.assertEqual(
                     finding["status"],
@@ -226,7 +250,7 @@ class TestChattogramFixtures(unittest.TestCase):
                 )
 
     def test_behavioral_audit_engine_execution_on_corrected_packet(self):
-        """Execute live checks.py:audit() on corrected packet values; all 7 checks must return 'Passed'."""
+        """Execute live checks.py:audit() on corrected packet values; all 8 checks must return 'Passed'."""
         with open(ANSWER_KEY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -234,7 +258,7 @@ class TestChattogramFixtures(unittest.TestCase):
         engine_input = map_canonical_to_engine(corr_fields)
 
         findings = audit(engine_input)
-        self.assertEqual(len(findings), 7, f"Audit routine must return exactly 7 findings, got {len(findings)}")
+        self.assertEqual(len(findings), 8, f"Audit routine must return exactly 8 findings, got {len(findings)}")
 
         for finding in findings:
             self.assertEqual(
@@ -244,6 +268,10 @@ class TestChattogramFixtures(unittest.TestCase):
             )
         port_check = next(f for f in findings if f["check"] == "Port of discharge consistency")
         self.assertEqual(port_check["status"], "Passed")
+        weight_check = next(f for f in findings if f["check"] == "Cargo gross weight consistency")
+        self.assertEqual(weight_check["status"], "Passed")
+        self.assertIn("harmonized", weight_check["evidence"].lower())
+
 
     def test_direct_cargo_gross_weight_discrepancy_calculation(self):
         """Calculate cargo gross weight discrepancy directly from pl_cargo_gross_weight and bl_cargo_gross_weight."""
