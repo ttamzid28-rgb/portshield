@@ -40,7 +40,7 @@ class WeightPairingTests(unittest.TestCase):
                 self.assertFalse(values['pl_cargo_gross_weight'])
                 values.update(bl_cargo_gross_weight='21600', bl_cargo_gross_weight_unit='KG')
                 reviewed = review_fields(values, evidence['_field_states'])
-                self.assertEqual(audit(values, reviewed)[-1]['status'], 'Insufficient data')
+                self.assertEqual(next(f for f in audit(values, reviewed) if f['check'] == 'Cargo gross weight consistency')['status'], 'Insufficient data')
 
     def test_valid_pair_provenance_and_conversion(self):
         for quote, amount, unit in [
@@ -55,14 +55,14 @@ class WeightPairingTests(unittest.TestCase):
                              states['pl_cargo_gross_weight_unit']['candidates'][0]['weight_source'])
             values.update(bl_cargo_gross_weight='21600', bl_cargo_gross_weight_unit='KG')
             reviewed = review_fields(values, states)
-            self.assertEqual(audit(values, reviewed)[-1]['status'], 'Passed')
+            self.assertEqual(next(f for f in audit(values, reviewed) if f['check'] == 'Cargo gross weight consistency')['status'], 'Passed')
 
     def test_bad_manual_numbers_do_not_crash_or_change_meaning(self):
         for value in ['Infinity', '-Infinity', 'NaN', 'sNaN', '1e100', '21,6', '9' * 100, '-1', '0']:
             with self.subTest(value=value):
                 values = dict(pl_cargo_gross_weight=value, pl_cargo_gross_weight_unit='KG',
                               bl_cargo_gross_weight='216', bl_cargo_gross_weight_unit='KG')
-                self.assertEqual(audit(values, review_fields(values, {}))[-1]['status'], 'Insufficient data')
+                self.assertEqual(next(f for f in audit(values, review_fields(values, {})) if f['check'] == 'Cargo gross weight consistency')['status'], 'Insufficient data')
 
     def test_invalid_tolerances_are_bounded(self):
         values = dict(pl_cargo_gross_weight='21600', pl_cargo_gross_weight_unit='KG',

@@ -17,10 +17,10 @@ st.markdown("""<style>
 .stagebar{padding:12px 16px;background:#e5f3f1;border:1px solid #c5e3df;border-radius:8px;color:#146c63;margin-bottom:18px}
 </style>""",unsafe_allow_html=True)
 st.markdown('<div class="hero"><div class="eyebrow">PORTSHIELD AI / IMPORT OPERATIONS</div><h1>Trade document review workbench</h1><p>Find conflicts. Review the evidence. Prepare corrections before submission.</p></div>',unsafe_allow_html=True)
-st.caption('LIVE PROTOTYPE v0.9 · Eight deterministic checks · Gemini PDF and OpenRouter text AI options')
+st.caption('LIVE PROTOTYPE v0.9 · Nine deterministic checks · Gemini PDF and OpenRouter text AI options')
 fields=['lc_currency','lc_amount','latest_shipment_date','lc_port_of_discharge','invoice_currency','invoice_total','invoice_quantity','unit_price','packing_quantity','packing_container','bl_container','on_board_date','bl_port_of_discharge','pl_cargo_gross_weight','pl_cargo_gross_weight_unit','bl_cargo_gross_weight','bl_cargo_gross_weight_unit']
-base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','lc_port_of_discharge':'Chattogram Sea Port','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'ABCD1234567','bl_container':'ABCD1234568','on_board_date':'2026-10-21','bl_port_of_discharge':'Mongla Port','pl_cargo_gross_weight':'21600','pl_cargo_gross_weight_unit':'KGS','bl_cargo_gross_weight':'20700','bl_cargo_gross_weight_unit':'KGS'}
-fixed={**base,'invoice_total':'25000','bl_container':'ABCD1234567','bl_port_of_discharge':'Chattogram Sea Port','bl_cargo_gross_weight':'21600'}
+base={'lc_currency':'USD','lc_amount':'25000','latest_shipment_date':'2026-10-20','lc_port_of_discharge':'Chattogram Sea Port','invoice_currency':'USD','invoice_total':'27000','invoice_quantity':'100','unit_price':'250','packing_quantity':'100','packing_container':'MEDU1000060','bl_container':'MEDU1000067','on_board_date':'2026-10-21','bl_port_of_discharge':'Mongla Port','pl_cargo_gross_weight':'21600','pl_cargo_gross_weight_unit':'KGS','bl_cargo_gross_weight':'20700','bl_cargo_gross_weight_unit':'KGS'}
+fixed={**base,'invoice_total':'25000','bl_container':'MEDU1000060','bl_port_of_discharge':'Chattogram Sea Port','bl_cargo_gross_weight':'21600'}
 with st.sidebar:
     st.title('PortShield AI')
     st.caption('COMMERCIAL DESK')
@@ -68,7 +68,7 @@ with overview:
     st.subheader('Exception queue')
     pending=[r for r in current if r['status']!='Passed']
     if pending:st.dataframe(pending,hide_index=True,use_container_width=True)
-    else:st.success('No issues detected in the eight supported checks. Human review remains required.')
+    else:st.success('No issues detected in the nine supported checks. Human review remains required.')
     st.info('Start with the sample packet, or upload the supplied PDFs in Document intake. Change confirmed values, run checks, then open Corrections & report.')
 with upload:
     st.subheader('Upload a document packet')
@@ -231,7 +231,7 @@ with review:
                 st.write(result['evidence']);st.caption('Evidence refers to confirmed values; edits require reviewer verification against the source.')
         with st.expander('Source extraction evidence'):
             render_source_evidence(st.session_state.evidence)
-        report={'prototype':'PortShield v0.9','scope':'Eight limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
+        report={'prototype':'PortShield v0.9','scope':'Nine limited checks; human approval required','fields':st.session_state.fields,'findings':results,'source_evidence':st.session_state.evidence}
         st.download_button('Download review report (JSON)',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with actions:
     st.subheader('Correction desk')
@@ -240,6 +240,7 @@ with actions:
         st.info('Run document checks in Review & evidence to generate an action pack.')
     else:
         recommendations={
+            'Container check digit (ISO 6346)':('Commercial officer / carrier / supplier','Verify the complete identifier against the shipping record. Confirm any correction manually; a calculated digit alone does not establish the correct container number.'),
             'Currency':('Commercial officer / supplier','Reconcile the invoice currency with the credit. Confirm the agreed currency before issuing revised documents.'),
             'Quantity (same unit required)':('Commercial officer / supplier','Confirm equivalent units and the actual shipped quantity. Reconcile invoice and packing list; do not change factual quantities merely to match.'),
             'Container identifier':('Commercial officer / carrier / supplier','Confirm the actual container identifier against the shipping record and correct the document containing the error.'),
@@ -261,11 +262,11 @@ with actions:
             lines.extend([r['check'],r['evidence'],'Suggested owner: '+owner,'Requested action: '+action,''])
         draft='Subject: Document review - please confirm outstanding items\n\nPlease review the items below against the actual shipment and credit terms. Confirm the appropriate correction or escalation before final submission.\n\n'+'\n'.join(lines)
         st.download_button('Download correction-request draft',draft,'portshield-correction-request.txt','text/plain')
-        report={'prototype':'PortShield v0.9','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Eight limited checks; human approval required'}
+        report={'prototype':'PortShield v0.9','fields':st.session_state.fields,'findings':st.session_state.results,'source_evidence':st.session_state.evidence,'scope':'Nine limited checks; human approval required'}
         st.download_button('Download full review data',json.dumps(report,indent=2),'portshield-review.json','application/json')
 with about:
     st.subheader('Working today')
-    st.write('Gemini PDF extraction and OpenRouter free text AI (provider API key required; review mandatory) • sample PDF upload • labelled text extraction • editable fields • eight deterministic checks • source text evidence • comparison with previous review • downloadable JSON report')
+    st.write('Gemini PDF extraction and OpenRouter free text AI (provider API key required; review mandatory) • sample PDF upload • labelled text extraction • editable fields • nine deterministic checks • source text evidence • comparison with previous review • downloadable JSON report')
     st.subheader('Next milestones')
     st.write('Benchmark AI extraction on real layouts; PDF evidence viewer; versioned correction uploads; expert-reviewed rules and evaluation dataset.')
     st.caption('No financial savings, accuracy percentage or regulatory certification is claimed. Uploaded files are processed in the app session; do not upload confidential trade documents to this public prototype.')
