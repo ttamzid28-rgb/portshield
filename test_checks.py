@@ -799,10 +799,10 @@ class TestCargoGrossWeightConsistency(unittest.TestCase):
         self.assertIn("Unsupported cargo weight unit: LBS", lbs_err)
 
 
-class TestAuditPipelineEightChecks(unittest.TestCase):
-    """Verify live audit execution pipeline runs all 8 deterministic checks."""
+class TestAuditPipelineNineChecks(unittest.TestCase):
+    """Verify live audit execution pipeline runs all 9 deterministic checks."""
 
-    def test_audit_pipeline_returns_eight_findings_on_complete_clean_data(self):
+    def test_audit_pipeline_returns_nine_findings_on_complete_clean_data(self):
         clean_input = {
             "lc_currency": "USD",
             "invoice_currency": "USD",
@@ -825,7 +825,7 @@ class TestAuditPipelineEightChecks(unittest.TestCase):
             "bl_cargo_gross_weight_unit": "KGS",
         }
         findings = audit(clean_input)
-        self.assertEqual(len(findings), 8, f"Audit must return exactly 8 findings, got {len(findings)}")
+        self.assertEqual(len(findings), 9, f"Audit must return exactly 9 findings, got {len(findings)}")
 
         checks = [f["check"] for f in findings]
         self.assertIn("Port of discharge consistency", checks)

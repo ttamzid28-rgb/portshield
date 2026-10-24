@@ -434,6 +434,8 @@ def audit(d, field_states=None):
     findings.append(check_port_of_discharge(d, field_states))
     # Check 2: Cargo gross weight consistency
     findings.append(check_cargo_gross_weight(d, field_states))
+    from container_checks import check_container_check_digits
+    findings.append(check_container_check_digits(d, field_states))
     return findings
 
 

@@ -198,7 +198,7 @@ class TestChattogramFixtures(unittest.TestCase):
 
         # Run live audit routine from checks.py
         findings = audit(engine_input)
-        self.assertEqual(len(findings), 8, f"Audit routine must return exactly 8 findings, got {len(findings)}")
+        self.assertEqual(len(findings), 9, f"Audit routine must return exactly 9 findings, got {len(findings)}")
 
         for finding in findings:
             self.assertEqual(
@@ -222,7 +222,7 @@ class TestChattogramFixtures(unittest.TestCase):
 
         # Run live audit routine from checks.py
         findings = audit(engine_input)
-        self.assertEqual(len(findings), 8, f"Audit routine must return exactly 8 findings, got {len(findings)}")
+        self.assertEqual(len(findings), 9, f"Audit routine must return exactly 9 findings, got {len(findings)}")
 
         for finding in findings:
             if finding["check"] == "Port of discharge consistency":
@@ -233,6 +233,9 @@ class TestChattogramFixtures(unittest.TestCase):
                 )
                 self.assertIn("Mongla", finding["evidence"])
                 self.assertIn("Chattogram", finding["evidence"])
+            elif finding["check"] == "Container check digit (ISO 6346)":
+                self.assertEqual(finding["status"], "Review required")
+                self.assertIn("stated digit 7, calculated digit 0", finding["evidence"])
             elif finding["check"] == "Cargo gross weight consistency":
                 self.assertEqual(
                     finding["status"],
@@ -258,7 +261,7 @@ class TestChattogramFixtures(unittest.TestCase):
         engine_input = map_canonical_to_engine(corr_fields)
 
         findings = audit(engine_input)
-        self.assertEqual(len(findings), 8, f"Audit routine must return exactly 8 findings, got {len(findings)}")
+        self.assertEqual(len(findings), 9, f"Audit routine must return exactly 9 findings, got {len(findings)}")
 
         for finding in findings:
             self.assertEqual(
